@@ -1,6 +1,6 @@
 include common.mk
 
-SUBDIRS := stand
+SUBDIRS:= stand
 
 .PHONY: all clean $(SUBDIRS)
 
