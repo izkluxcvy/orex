@@ -1,6 +1,6 @@
 include ../common.mk
 
-.PHONY: all clean $(BOOT)
+.PHONY: all $(BOOT)
 
 all: $(BOOT)
 

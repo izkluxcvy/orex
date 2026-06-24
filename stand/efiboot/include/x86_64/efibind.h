@@ -1,5 +1,4 @@
-#ifndef EFIBIND_H
-#define EFIBIND_H
+#pragma once
 
 #include <stdint.h>
 
@@ -17,4 +16,6 @@ typedef void VOID;
 typedef int64_t  INTN;
 typedef uint64_t UINTN;
 
-#endif
+#define EFIERR(x) (x | 0x8000'0000'0000'0000)
+
+#define EFI_KERNEL_ABI __attribute__((sysv_abi))

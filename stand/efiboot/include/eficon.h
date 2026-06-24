@@ -1,15 +1,104 @@
-#ifndef EFICON_H
-#define EFICON_H
+#pragma once
 
 #include "efidef.h"
 
+//
+// EFI Output Protocol
+//
+
 struct _EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL;
+
+// EFI_TEXT_RESET
+typedef EFI_STATUS (*EFI_TEXT_RESET)(
+    IN struct _EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *This,
+    IN BOOLEAN                                  ExtendedVerification);
+
+// EFI_TEXT_STRING
 typedef EFI_STATUS (*EFI_TEXT_STRING)(
     IN struct _EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *This, IN CHAR16 *String);
 
+// EFI_TEXT_TEST_STRING
+typedef EFI_STATUS (*EFI_TEXT_TEST_STRING)(
+    IN struct _EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *This, IN CHAR16 *String);
+
+// EFI_TEXT_QUERY_MODE
+typedef EFI_STATUS (*EFI_TEXT_QUERY_MODE)(
+    IN struct _EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *This, IN UINTN ModeNumber,
+    OUT UINTN *Columns, OUT UINTN *Rows);
+
+// EFI_TEXT_SET_MODE
+typedef EFI_STATUS (*EFI_TEXT_SET_MODE)(
+    IN struct _EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *This, IN UINTN ModeNumber);
+
+// EFI_TEXT_SET_ATTRIBUTE
+typedef EFI_STATUS (*EFI_TEXT_SET_ATTRIBUTE)(
+    IN struct _EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *This, IN UINTN Attribute);
+
+// EFI_TEXT_CLEAR_SCREEN
+typedef EFI_STATUS (*EFI_TEXT_CLEAR_SCREEN)(
+    IN struct _EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *This);
+
+// EFI_TEXT_SET_CURSOR_POSITION
+typedef EFI_STATUS (*EFI_TEXT_SET_CURSOR_POSITION)(
+    IN struct _EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *This, IN UINTN Column,
+    IN UINTN Row);
+
+// EFI_TEXT_ENABLE_CURSOR
+typedef EFI_STATUS (*EFI_TEXT_ENABLE_CURSOR)(
+    IN struct _EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *This, IN BOOLEAN Enable);
+
+// EFI_SIMPLE_TEXT_OUTPUT_MODE
+typedef struct {
+    INT32   MaxMode;
+    INT32   Mode;
+    INT32   Attribute;
+    INT32   CursorColumn;
+    INT32   CursorRow;
+    BOOLEAN CursorVisible;
+} EFI_SIMPLE_TEXT_OUTPUT_MODE;
+
+// EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL
 typedef struct _EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL {
-    uint64_t       *dummy;
-    EFI_TEXT_STRING OutputString;
+    EFI_TEXT_RESET Reset;
+
+    EFI_TEXT_STRING      OutputString;
+    EFI_TEXT_TEST_STRING TestString;
+
+    EFI_TEXT_QUERY_MODE    QueryMode;
+    EFI_TEXT_SET_MODE      SetMode;
+    EFI_TEXT_SET_ATTRIBUTE SetAttribute;
+
+    EFI_TEXT_CLEAR_SCREEN        ClearScreen;
+    EFI_TEXT_SET_CURSOR_POSITION SetCursorPosition;
+    EFI_TEXT_ENABLE_CURSOR       EnableCursor;
+
+    EFI_SIMPLE_TEXT_OUTPUT_MODE *Mode;
 } EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL;
 
-#endif
+//
+// EFI Input Protocol
+//
+
+struct _EFI_SIMPLE_TEXT_INPUT_PROTOCOL;
+
+// EFI_INPUT_RESET
+typedef EFI_STATUS (*EFI_INPUT_RESET)(
+    IN struct _EFI_SIMPLE_TEXT_INPUT_PROTOCOL *This,
+    IN BOOLEAN                                 ExtendedVerification);
+
+// EFI_INPUT_KEY
+typedef struct {
+    UINT16 ScanCode;
+    CHAR16 UnicodeChar;
+} EFI_INPUT_KEY;
+
+// EFI_INPUT_READ_KEY
+typedef EFI_STATUS (*EFI_INPUT_READ_KEY)(
+    IN struct _EFI_SIMPLE_TEXT_INPUT_PROTOCOL *This, OUT EFI_INPUT_KEY *Key);
+
+// EFI_SIMPLE_TEXT_INPUT_PROTOCOL
+typedef struct _EFI_SIMPLE_TEXT_INPUT_PROTOCOL {
+    EFI_INPUT_RESET    Reset;
+    EFI_INPUT_READ_KEY ReadKeyStroke;
+    EFI_EVENT          WaitForKey;
+} EFI_SIMPLE_TEXT_INPUT_PROTOCOL;

@@ -1,5 +1,8 @@
 .cache/
-obj/
 bin/
+*.o
+*.d
 compile_commands.json
-run_qemu.sh
+ovmf/
+mnt/
+disk.img
