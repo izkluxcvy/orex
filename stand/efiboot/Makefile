@@ -14,7 +14,7 @@ INCLUDE:= -Iinclude -Iinclude/$(ARCH)
 
 LDFLAGS:= -subsystem:efi_application -entry:efi_main
 
-SRCS:= efi_main.c ../lib/elf.c
+SRCS:= efi_main.c ../lib/elf.c ../lib/printf.c
 OBJS:= $(SRCS:%.c=%.o)
 
 .PHONY: all

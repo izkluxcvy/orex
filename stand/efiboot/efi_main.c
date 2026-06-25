@@ -1,6 +1,7 @@
 #include <efi.h>
 
 #include "../lib/elf.h"
+#include "../lib/printf.h"
 
 #define KERNEL_FILE_PATH L"\\kernel.elf"
 
@@ -14,11 +15,10 @@ EFI_SYSTEM_TABLE     *ST; // System Table
 EFI_BOOT_SERVICES    *BS; // Boot Services
 EFI_RUNTIME_SERVICES *RS; // Runtime Services
 
-UINTN mapkey;
-
 static EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *conout;
 static EFI_GRAPHICS_OUTPUT_PROTOCOL    *gop;
 static void                            *kernel_entry_point;
+static UINTN                            mapkey;
 
 static void init_console();
 static void init_gop();
@@ -42,11 +42,17 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
     return EFI_SUCCESS;
 }
 
+void efi_putc(char c) { conout->OutputString(conout, (CHAR16[]){c, 0}); }
+
 static void init_console() {
     conout = ST->ConOut;
+
     conout->ClearScreen(conout);
     conout->EnableCursor(conout, TRUE);
-    conout->OutputString(conout, L"Console initialized\r\n");
+
+    printf_putc = efi_putc;
+
+    printf("Console initialized\r\n");
 }
 
 static void init_gop() {
@@ -54,11 +60,13 @@ static void init_gop() {
 
     status = BS->LocateProtocol(&gop_guid, nullptr, (VOID **)&gop);
     if (EFI_ERROR(status)) {
-        conout->OutputString(conout, L"Failed to locate GOP protocol\r\n");
+        printf("Failed to locate GOP protocol: %d\r\n", status);
         return;
     }
 
-    conout->OutputString(conout, L"GOP initialized\r\n");
+    printf("GOP initialized: %ux%u, PixelFormat: %d\r\n",
+           gop->Mode->Info->HorizontalResolution,
+           gop->Mode->Info->VerticalResolution, gop->Mode->Info->PixelFormat);
 }
 
 static void load_kernel_file() {
@@ -68,8 +76,7 @@ static void load_kernel_file() {
     EFI_LOADED_IMAGE_PROTOCOL *li;
     status = BS->HandleProtocol(IH, &li_guid, (VOID **)&li);
     if (EFI_ERROR(status)) {
-        conout->OutputString(conout,
-                             L"Failed to get loaded image protocol\r\n");
+        printf("Failed to get loaded image protocol: %d\r\n", status);
         return;
     }
 
@@ -77,8 +84,7 @@ static void load_kernel_file() {
     EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *sfs;
     status = BS->HandleProtocol(li->DeviceHandle, &sfs_guid, (VOID **)&sfs);
     if (EFI_ERROR(status)) {
-        conout->OutputString(conout,
-                             L"Failed to get simple file system protocol\r\n");
+        printf("Failed to get simple file system protocol: %d\r\n", status);
         return;
     }
 
@@ -86,7 +92,7 @@ static void load_kernel_file() {
     EFI_FILE_PROTOCOL *root;
     status = sfs->OpenVolume(sfs, &root);
     if (EFI_ERROR(status)) {
-        conout->OutputString(conout, L"Failed to open volume\r\n");
+        printf("Failed to open volume: %d\r\n", status);
         return;
     }
 
@@ -95,17 +101,17 @@ static void load_kernel_file() {
     status =
         root->Open(root, &kernel_file, KERNEL_FILE_PATH, EFI_FILE_MODE_READ, 0);
     if (EFI_ERROR(status)) {
-        conout->OutputString(conout, L"Failed to open kernel file\r\n");
+        printf("Failed to open kernel file: %d\r\n", status);
         return;
     }
 
     // Get file size
-    UINT8 file_info_buffer[256];
+    UINT8 file_info_buffer[sizeof(EFI_FILE_INFO) + sizeof(KERNEL_FILE_PATH)];
     UINTN file_info_size = sizeof(file_info_buffer);
     status = kernel_file->GetInfo(kernel_file, &fi_guid, &file_info_size,
                                   file_info_buffer);
     if (EFI_ERROR(status)) {
-        conout->OutputString(conout, L"Failed to get kernel file info\r\n");
+        printf("Failed to get kernel file info: %d\r\n", status);
         return;
     }
     EFI_FILE_INFO *file_info = (EFI_FILE_INFO *)file_info_buffer;
@@ -115,15 +121,14 @@ static void load_kernel_file() {
     VOID *kernel_buffer;
     status = BS->AllocatePool(EfiLoaderData, file_size, &kernel_buffer);
     if (EFI_ERROR(status)) {
-        conout->OutputString(conout,
-                             L"Failed to allocate memory for kernel\r\n");
+        printf("Failed to allocate memory for kernel: %d\r\n", status);
         return;
     }
 
     // Read kernel file into buffer
     status = kernel_file->Read(kernel_file, &file_size, kernel_buffer);
     if (EFI_ERROR(status)) {
-        conout->OutputString(conout, L"Failed to read kernel file\r\n");
+        printf("Failed to read kernel file: %d\r\n", status);
         return;
     }
 
@@ -138,8 +143,7 @@ static void load_kernel_file() {
     status      = BS->AllocatePages(AllocateAddress, EfiLoaderData, pages,
                                     &kernel_first_addr);
     if (EFI_ERROR(status)) {
-        conout->OutputString(conout,
-                             L"Failed to allocate pages for kernel\r\n");
+        printf("Failed to allocate pages for kernel: %d\r\n", status);
         return;
     }
 
@@ -149,7 +153,8 @@ static void load_kernel_file() {
     // Free kernel buffer
     BS->FreePool(kernel_buffer);
 
-    conout->OutputString(conout, L"Kernel file loaded\r\n");
+    printf("Kernel file loaded: entry point: 0x%p, size: %u bytes\r\n",
+           kernel_entry_point, kernel_size);
 }
 
 static void get_memory_map() {
@@ -160,24 +165,23 @@ static void get_memory_map() {
     UINT32 descver;
     status = BS->GetMemoryMap(&mmsize, nullptr, &mapkey, &descsize, &descver);
     if (status != EFI_BUFFER_TOO_SMALL) {
-        conout->OutputString(conout, L"Failed to get memory map size\r\n");
+        printf("Failed to get memory map size: %d\r\n", status);
         return;
     }
-    mmsize += descsize * 2; // Add extra space for new descriptors
+    mmsize += descsize; // Add extra space for new entries
 
     // Allocate memory for memory map
     EFI_MEMORY_DESCRIPTOR *mmap;
     status = BS->AllocatePool(EfiLoaderData, mmsize, (VOID **)&mmap);
     if (EFI_ERROR(status)) {
-        conout->OutputString(conout,
-                             L"Failed to allocate memory for memory map\r\n");
+        printf("Failed to allocate memory for memory map: %d\r\n", status);
         return;
     }
 
     // Get memory map
     status = BS->GetMemoryMap(&mmsize, mmap, &mapkey, &descsize, &descver);
     if (EFI_ERROR(status)) {
-        conout->OutputString(conout, L"Failed to get memory map\r\n");
+        printf("Failed to get memory map: %d\r\n", status);
         return;
     }
 }
@@ -185,6 +189,7 @@ static void get_memory_map() {
 static void exit_boot_services() {
     EFI_STATUS status;
 
+    printf("Exiting boot services..\r\n");
     int retry;
     for (retry = 0; retry < 3; retry++) {
         get_memory_map();
@@ -196,12 +201,12 @@ static void exit_boot_services() {
     }
 
     if (retry == 3) {
-        conout->OutputString(conout, L"Failed to exit boot services\r\n");
+        printf("Failed to exit boot services: %d\r\n", status);
     }
 }
 
 static void jump_to_kernel() {
-    typedef void (*kernel_entry_t)() EFI_KERNEL_ABI;
+    typedef void (*kernel_entry_t)(EFI_PHYSICAL_ADDRESS, UINTN) EFI_KERNEL_ABI;
     kernel_entry_t kernel_entry = (kernel_entry_t)kernel_entry_point;
-    kernel_entry();
+    kernel_entry(gop->Mode->FrameBufferBase, gop->Mode->FrameBufferSize);
 }

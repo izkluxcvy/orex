@@ -18,7 +18,7 @@ OBJS:= $(SRCS:%.c=%.o)
 
 all: $(TARGET)
 
-$(OBJS): $(SRCS)
+%.o: %.c
 	$(CC) $(CFLAGS) -o $@ -c $<
 
 $(TARGET): $(OBJS)
