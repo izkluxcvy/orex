@@ -43,6 +43,6 @@ typedef struct {
     Elf64_Xword p_align;
 } Elf64_Phdr;
 
-void elf64_load(void *elf_data, void **entry_addr, uint64_t *first_addr,
-                size_t *size);
-void elf64_load_segment(void *elf_data);
+void elf64_scan(const void *elf_data, void **entry_addr, uintptr_t *phys_base,
+                uintptr_t *virt_base, size_t *size);
+void elf64_load(const void *elf_data);

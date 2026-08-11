@@ -1,21 +1,26 @@
+BASEDIR := .
 include common.mk
 
-SUBDIRS:= stand kernel
+SUBDIRS := stand sys
 
-.PHONY: all clean run_qemu $(SUBDIRS)
+.PHONY: all pre clean run_qemu $(SUBDIRS)
 
-all: $(SUBDIRS)
+all: pre $(SUBDIRS)
 	@echo "Build complete"
+
+pre:
+	mkdir -p $(BINDIR)
 
 $(SUBDIRS):
 	cd $@ && $(MAKE) || exit 1
 
 run_qemu: all
-	DISK_IMAGE=$(ROOT)/disk.img; \
-	MOUNT_POINT=$(ROOT)/mnt; \
-	OVMF_DIR=$(ROOT)/ovmf; \
+	DISK_IMAGE=$(BASEDIR)/disk.img; \
+	MOUNT_POINT=$(BASEDIR)/mnt; \
+	OVMF_DIR=$(BASEDIR)/ovmf; \
+	LOADER_BIN=$(BINDIR)/loader.efi; \
 	if [ $(ARCH) = "x86_64" ]; then \
-		EFI_BIN=$(BINDIR)/BOOTX64.EFI; \
+		EFI_BIN_NAME=BOOTX64.EFI; \
 	fi; \
 	KERNEL_BIN=$(BINDIR)/kernel.elf; \
 	\
@@ -25,7 +30,7 @@ run_qemu: all
 	mkdir -p $$MOUNT_POINT; \
 	sudo mount -o loop $$DISK_IMAGE $$MOUNT_POINT; \
 	sudo mkdir -p $$MOUNT_POINT/EFI/BOOT; \
-	sudo cp $$EFI_BIN $$MOUNT_POINT/EFI/BOOT/; \
+	sudo cp $$LOADER_BIN $$MOUNT_POINT/EFI/BOOT/$$EFI_BIN_NAME; \
 	sudo cp $$KERNEL_BIN $$MOUNT_POINT/; \
 	sudo umount $$MOUNT_POINT; \
 	\

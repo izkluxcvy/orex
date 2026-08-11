@@ -6,4 +6,3 @@ all: $(BOOT)
 
 $(BOOT):
 	cd $@ && $(MAKE)
-	cd ..

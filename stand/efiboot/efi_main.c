@@ -1,7 +1,12 @@
+#include <stdint.h>
+
+#include <boot_info.h>
 #include <efi.h>
+#include <paging.h>
 
 #include "../lib/elf.h"
 #include "../lib/printf.h"
+#include "efidef.h"
 
 #define KERNEL_FILE_PATH L"\\kernel.elf"
 
@@ -19,11 +24,24 @@ static EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *conout;
 static EFI_GRAPHICS_OUTPUT_PROTOCOL    *gop;
 static void                            *kernel_entry_point;
 static UINTN                            mapkey;
+static EFI_MEMORY_DESCRIPTOR           *mmap;
+static UINTN                            mmap_size;
+static UINTN                            mmap_descsz;
+static struct boot_info                *boot_info;
+
+uintptr_t         kernel_phys_base;
+uintptr_t         kernel_virt_base;
+size_t            kernel_size;
+struct mem_range *mem_ranges;
+size_t            mem_range_count;
+struct page_pool  paging_pool;
 
 static void init_console();
 static void init_gop();
 static void load_kernel_file();
+static void build_boot_info();
 static void exit_boot_services();
+extern void machdep_init();
 static void jump_to_kernel();
 
 EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
@@ -35,7 +53,9 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
     init_console();
     init_gop();
     load_kernel_file();
+    build_boot_info();
     exit_boot_services();
+    machdep_init();
     jump_to_kernel();
 
     // won't reach here
@@ -132,23 +152,21 @@ static void load_kernel_file() {
         return;
     }
 
-    // Load kernel file
-    uint64_t kernel_first_addr;
-    size_t   kernel_size;
-    elf64_load(kernel_buffer, &kernel_entry_point, &kernel_first_addr,
-               &kernel_size);
+    // Scan kernel file
+    elf64_scan(kernel_buffer, &kernel_entry_point, &kernel_phys_base,
+               &kernel_virt_base, &kernel_size);
 
     // Allocate memory for kernel
     UINTN pages = (kernel_size + 0xFFF) / 0x1000;
     status      = BS->AllocatePages(AllocateAddress, EfiLoaderData, pages,
-                                    &kernel_first_addr);
+                                    &kernel_phys_base);
     if (EFI_ERROR(status)) {
         printf("Failed to allocate pages for kernel: %d\r\n", status);
         return;
     }
 
     // Load kernel segments
-    elf64_load_segment(kernel_buffer);
+    elf64_load(kernel_buffer);
 
     // Free kernel buffer
     BS->FreePool(kernel_buffer);
@@ -161,29 +179,120 @@ static void get_memory_map() {
     EFI_STATUS status;
 
     // Get memory map size
-    UINTN  mmsize = 0, descsize = 0;
+    mmap_size = 0;
     UINT32 descver;
-    status = BS->GetMemoryMap(&mmsize, nullptr, &mapkey, &descsize, &descver);
+    status =
+        BS->GetMemoryMap(&mmap_size, nullptr, &mapkey, &mmap_descsz, &descver);
     if (status != EFI_BUFFER_TOO_SMALL) {
         printf("Failed to get memory map size: %d\r\n", status);
         return;
     }
-    mmsize += descsize; // Add extra space for new entries
+    mmap_size += mmap_descsz; // Add extra space for new entries
 
     // Allocate memory for memory map
-    EFI_MEMORY_DESCRIPTOR *mmap;
-    status = BS->AllocatePool(EfiLoaderData, mmsize, (VOID **)&mmap);
+    status = BS->AllocatePool(EfiLoaderData, mmap_size, (VOID **)&mmap);
     if (EFI_ERROR(status)) {
         printf("Failed to allocate memory for memory map: %d\r\n", status);
         return;
     }
 
     // Get memory map
-    status = BS->GetMemoryMap(&mmsize, mmap, &mapkey, &descsize, &descver);
+    status =
+        BS->GetMemoryMap(&mmap_size, mmap, &mapkey, &mmap_descsz, &descver);
     if (EFI_ERROR(status)) {
         printf("Failed to get memory map: %d\r\n", status);
         return;
     }
+}
+
+static size_t build_boot_memmap(struct memmap_entry *boot_memmap,
+                                size_t               capacity) {
+    size_t count = 0;
+    for (UINTN i = 0; i < mmap_size / mmap_descsz && count < capacity; i++) {
+        EFI_MEMORY_DESCRIPTOR *desc =
+            (EFI_MEMORY_DESCRIPTOR *)((UINT8 *)mmap + i * mmap_descsz);
+        if (desc->NumberOfPages == 0) {
+            continue;
+        }
+
+        boot_memmap[count].base = desc->PhysicalStart;
+        boot_memmap[count].size = desc->NumberOfPages * 0x1000;
+        switch (desc->Type) {
+        case EfiConventionalMemory:
+        case EfiBootServicesCode:
+        case EfiBootServicesData:
+            boot_memmap[count].type = MEM_USABLE;
+            break;
+        default:
+            boot_memmap[count].type = MEM_RESERVED;
+            break;
+        }
+        count++;
+    }
+
+    return count;
+}
+
+static struct mem_range *build_mem_ranges(size_t *count) {
+    size_t            capacity = mmap_size / mmap_descsz;
+    struct mem_range *ranges;
+    BS->AllocatePool(EfiLoaderData, capacity * sizeof(*ranges),
+                     (VOID **)&ranges);
+
+    size_t range_count = 0;
+    for (UINTN i = 0; i < capacity; i++) {
+        EFI_MEMORY_DESCRIPTOR *desc =
+            (EFI_MEMORY_DESCRIPTOR *)((UINT8 *)mmap + i * mmap_descsz);
+        if (desc->NumberOfPages == 0) {
+            continue;
+        }
+
+        ranges[range_count].base = desc->PhysicalStart;
+        ranges[range_count].size = desc->NumberOfPages * 0x1000;
+        range_count++;
+    }
+
+    ranges[range_count].base = gop->Mode->FrameBufferBase;
+    ranges[range_count].size = gop->Mode->FrameBufferSize;
+    range_count++;
+
+    *count = range_count;
+    return ranges;
+}
+
+static void build_boot_info() {
+    BS->AllocatePool(EfiLoaderData, sizeof(*boot_info), (VOID **)&boot_info);
+
+    get_memory_map();
+    size_t               map_capacity = mmap_size / mmap_descsz;
+    struct memmap_entry *boot_memmap;
+    BS->AllocatePool(EfiLoaderData, map_capacity * sizeof(*boot_memmap),
+                     (VOID **)&boot_memmap);
+
+    EFI_PHYSICAL_ADDRESS pool_base = 0;
+    BS->AllocatePages(AllocateAnyPages, EfiLoaderData, PAGE_POOL_PAGES,
+                      &pool_base);
+    paging_pool = (struct page_pool){
+        .base = pool_base, .size = PAGE_POOL_PAGES * 0x1000, .used = 0};
+
+    get_memory_map();
+    size_t memmap_count = build_boot_memmap(boot_memmap, map_capacity);
+    mem_ranges          = build_mem_ranges(&mem_range_count);
+
+    struct framebuffer fb = (struct framebuffer){
+        .base                = gop->Mode->FrameBufferBase,
+        .size                = gop->Mode->FrameBufferSize,
+        .width               = gop->Mode->Info->HorizontalResolution,
+        .height              = gop->Mode->Info->VerticalResolution,
+        .pixels_per_scanline = gop->Mode->Info->PixelsPerScanLine,
+        .pixel_format        = gop->Mode->Info->PixelFormat,
+    };
+    boot_info->fb               = &fb;
+    boot_info->memmap           = boot_memmap;
+    boot_info->memmap_count     = memmap_count;
+    boot_info->kernel_phys_base = kernel_phys_base;
+    boot_info->kernel_virt_base = kernel_virt_base;
+    boot_info->kernel_size      = kernel_size;
 }
 
 static void exit_boot_services() {

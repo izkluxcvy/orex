@@ -1,3 +1,5 @@
+#include <stdarg.h>
+
 #include "printf.h"
 
 void (*printf_putc)(char c);
