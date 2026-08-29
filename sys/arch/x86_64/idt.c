@@ -1,5 +1,7 @@
 #include <stdint.h>
 
+#include <printf.h>
+
 #include "segment.h"
 #include "serial.h"
 
@@ -70,31 +72,22 @@ static void halt(void) {
 
 static void dump_frame(uint8_t vector, uint64_t error_code,
                        struct interrupt_frame *frame) {
-    serial_puts("\r\n*** CPU exception: ");
-    serial_puts(exception_names[vector]);
-    serial_puts(" (vector ");
-    serial_put_hex64(vector);
-    serial_puts(", error ");
-    serial_put_hex64(error_code);
-    serial_puts(")\r\nrip=");
-    serial_put_hex64(frame->ip);
-    serial_puts(" cs=");
-    serial_put_hex64(frame->cs);
-    serial_puts(" flags=");
-    serial_put_hex64(frame->flags);
-    serial_puts("\r\nrsp=");
-    serial_put_hex64(frame->sp);
-    serial_puts(" ss=");
-    serial_put_hex64(frame->ss);
+    printf("\n*** CPU exception: %s", exception_names[vector]);
+    printf(" (vector %x", vector);
+    printf(", error %lx", error_code);
+    printf(")\nrip=%lx", frame->ip);
+    printf(" cs=%lx", frame->cs);
+    printf(" flags=%lx", frame->flags);
+    printf("\nrsp=%lx", frame->sp);
+    printf(" ss=%lx", frame->ss);
 
     if (vector == 14) { // Page Fault: CR2 holds the faulting address
         uint64_t cr2;
         __asm__ __volatile__("mov %0, cr2" : "=r"(cr2));
-        serial_puts("\r\ncr2=");
-        serial_put_hex64(cr2);
+        printf("\ncr2=%lx", cr2);
     }
 
-    serial_puts("\r\n");
+    printf("\n");
 }
 
 static void exception_common(uint8_t vector, uint64_t error_code,

@@ -279,7 +279,7 @@ static void build_boot_info() {
     size_t memmap_count = build_boot_memmap(boot_memmap, map_capacity);
     mem_ranges          = build_mem_ranges(&mem_range_count);
 
-    struct framebuffer fb = (struct framebuffer){
+    boot_info->fb = (struct framebuffer){
         .base                = gop->Mode->FrameBufferBase,
         .size                = gop->Mode->FrameBufferSize,
         .width               = gop->Mode->Info->HorizontalResolution,
@@ -287,7 +287,6 @@ static void build_boot_info() {
         .pixels_per_scanline = gop->Mode->Info->PixelsPerScanLine,
         .pixel_format        = gop->Mode->Info->PixelFormat,
     };
-    boot_info->fb               = &fb;
     boot_info->memmap           = boot_memmap;
     boot_info->memmap_count     = memmap_count;
     boot_info->kernel_phys_base = kernel_phys_base;
@@ -315,7 +314,7 @@ static void exit_boot_services() {
 }
 
 static void jump_to_kernel() {
-    typedef void (*kernel_entry_t)(EFI_PHYSICAL_ADDRESS, UINTN) EFI_KERNEL_ABI;
+    typedef void (*kernel_entry_t)(struct boot_info *) EFI_KERNEL_ABI;
     kernel_entry_t kernel_entry = (kernel_entry_t)kernel_entry_point;
-    kernel_entry(gop->Mode->FrameBufferBase, gop->Mode->FrameBufferSize);
+    kernel_entry(boot_info);
 }

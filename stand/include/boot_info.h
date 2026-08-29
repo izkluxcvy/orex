@@ -1,5 +1,6 @@
 #pragma once
 
+#include <stddef.h>
 #include <stdint.h>
 
 struct framebuffer {
@@ -23,7 +24,7 @@ struct memmap_entry {
 };
 
 struct boot_info {
-    struct framebuffer  *fb;
+    struct framebuffer   fb;
     struct memmap_entry *memmap;
     size_t               memmap_count;
     uintptr_t            kernel_phys_base;

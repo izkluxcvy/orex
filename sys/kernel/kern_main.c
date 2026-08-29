@@ -1,15 +1,21 @@
 #include <stdint.h>
 
-extern void machdep_init();
+#include <boot_info.h>
+#include <printf.h>
 
-void kern_main() {
+#include "kmalloc.h"
+
+extern void machdep_init();
+extern void mm_init(const struct boot_info *boot_info);
+
+void kern_main(struct boot_info *boot_info) {
     machdep_init();
-    // divide by zero exception
-    __asm__ __volatile__("xor eax, eax\n\t"
-                         "xor edx, edx\n\t"
-                         "xor ecx, ecx\n\t"
-                         "div ecx" ::
-                             : "eax", "ecx", "edx");
+    mm_init(boot_info);
+
+    void *p = kmalloc(1024);
+    printf("Allocated 1024 bytes at %p\n", p);
+    kfree(p);
+
     while (1) {
         __asm__ __volatile__("hlt");
     }
