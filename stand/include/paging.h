@@ -12,5 +12,5 @@ struct mem_range {
 struct page_pool {
     uintptr_t base;
     size_t    size;
-    int       used;
+    size_t    used;
 };
