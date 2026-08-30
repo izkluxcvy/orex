@@ -1,9 +1,8 @@
 #include <stdint.h>
 
 #include <boot_info.h>
+#include <kmalloc.h>
 #include <printf.h>
-
-#include "kmalloc.h"
 
 extern void machdep_init();
 extern void mm_init(const struct boot_info *boot_info);

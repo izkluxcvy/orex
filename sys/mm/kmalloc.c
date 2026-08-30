@@ -1,9 +1,9 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "kmalloc.h"
 #include "pmap.h"
 #include "pmm.h"
+#include <kmalloc.h>
 
 #define KHEAP_BASE     0xffffffffc0000000ULL
 #define KHEAP_LIMIT    0xffffffffe0000000ULL // 512 MiB arena ceiling
