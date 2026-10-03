@@ -6,6 +6,7 @@
 #include <printf.h>
 
 #include "../mm/pmm.h"
+#include "pmap.h"
 
 void kern_main(struct boot_info *boot_info) {
     struct boot_info bi = *boot_info;
@@ -13,13 +14,13 @@ void kern_main(struct boot_info *boot_info) {
     machdep_init();
     mm_init(&bi);
 
-    printf("orex: %lu pages free of %lu\n", pmm_free_pages(),
-           pmm_total_pages());
-    uintptr_t a = pmm_alloc_page();
-    uintptr_t b = pmm_alloc_page();
-    printf("orex: got pages %lx and %lx, %lu free\n", a, b, pmm_free_pages());
-    pmm_free_page(a);
-    pmm_free_page(b);
-    printf("orex: gave them back, %lu free; the next is %lx\n",
-           pmm_free_pages(), pmm_alloc_page());
+    uintptr_t pa = pmm_alloc_page();
+    uint64_t *p  = phys_to_virt(pa);
+    uint64_t *q  = (uint64_t *)0xFFFF'9000'0000'0000;
+    pmap_kenter((uintptr_t)q, pa, PMAP_WRITE);
+    *q = 0x1234;
+    printf("orex: page %lx is at %p and %p: wrote %lx, read %lx\n", pa, p, q,
+           *p, *q);
+    pmap_kremove((uintptr_t)q);
+    *q = 1; // should cause a page fault
 }
