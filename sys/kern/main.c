@@ -2,22 +2,24 @@
 
 #include <boot_info.h>
 #include <machdep.h>
+#include <mm.h>
 #include <printf.h>
 
+#include "../mm/pmm.h"
+
 void kern_main(struct boot_info *boot_info) {
-    struct boot_info *bi = boot_info;
+    struct boot_info bi = *boot_info;
 
     machdep_init();
-    printf("orex: kernel started\n");
-    printf("orex: kernel phys base = %p\n", (void *)bi->kernel_phys_base);
-    printf("orex: kernel virt base = %p\n", (void *)bi->kernel_virt_base);
-    printf("orex: kernel size = %u bytes\n", bi->kernel_size);
-    printf("orex: command line = %s\n", bi->cmdline);
-    for (size_t i = 0; i < bi->memmap_count; i++) {
-        struct memmap_entry *e = &bi->memmap[i];
-        printf("orex: memmap[%u]: base=%p, size=%u, %s\n", i, (void *)e->base,
-               e->size, e->type == MEM_USABLE ? "usable" : "reserved");
-    }
+    mm_init(&bi);
 
-    *(volatile uint64_t *)0xFFFF'9000'0000'0000 = 1;
+    printf("orex: %lu pages free of %lu\n", pmm_free_pages(),
+           pmm_total_pages());
+    uintptr_t a = pmm_alloc_page();
+    uintptr_t b = pmm_alloc_page();
+    printf("orex: got pages %lx and %lx, %lu free\n", a, b, pmm_free_pages());
+    pmm_free_page(a);
+    pmm_free_page(b);
+    printf("orex: gave them back, %lu free; the next is %lx\n",
+           pmm_free_pages(), pmm_alloc_page());
 }
