@@ -15,9 +15,10 @@ INCLUDE := -I../stand/include -Iinclude -Iarch/$(ARCH)
 
 LDFLAGS := -T arch/$(ARCH)/kernel.ld -z norelro --image-base=0x100000 --static
 
-SRCS := kern/main.c
+SRCS := kern/main.c kern/cpu.c kern/panic.c
 SRCS += arch/$(ARCH)/entry.c arch/$(ARCH)/init.c arch/$(ARCH)/serial.c \
-		arch/$(ARCH)/mem_.c
+		arch/$(ARCH)/mem_.c arch/$(ARCH)/gdt.c arch/$(ARCH)/idt.c \
+		arch/$(ARCH)/trap.c
 SRCS += lib/printf.c
 OBJS := $(SRCS:.c=.o)
 

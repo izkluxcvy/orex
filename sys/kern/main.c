@@ -18,4 +18,6 @@ void kern_main(struct boot_info *boot_info) {
         printf("orex: memmap[%u]: base=%p, size=%u, %s\n", i, (void *)e->base,
                e->size, e->type == MEM_USABLE ? "usable" : "reserved");
     }
+
+    *(volatile uint64_t *)0xFFFF'9000'0000'0000 = 1;
 }
