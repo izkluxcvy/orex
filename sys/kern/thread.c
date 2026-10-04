@@ -44,12 +44,13 @@ struct thread *thread_alloc(const char *name, thread_entry_t entry, void *arg,
     t->tid           = next_tid++;
     spin_unlock_irqrestore(&zombie_lock, idflags);
 
-    t->state    = THREAD_BLOCKED;
-    t->policy   = policy;
-    t->priority = priority;
-    t->slice    = SCHED_QUANTUM;
-    t->entry    = entry;
-    t->arg      = arg;
+    t->state         = THREAD_BLOCKED;
+    t->policy        = policy;
+    t->priority      = priority;
+    t->base_priority = priority;
+    t->slice         = SCHED_QUANTUM;
+    t->entry         = entry;
+    t->arg           = arg;
     set_name(t, name);
 
     if (!entry) {
@@ -107,11 +108,56 @@ void thread_exit(void *retval) {
 void thread_exit_locked(void *retval) {
     curthread->retval = retval;
     curthread->state  = THREAD_ZOMBIE;
-    make_reapable(curthread);
+    if (curthread->detached) {
+        make_reapable(curthread);
+    } else {
+        waitq_wakeup_all(&curthread->joiners);
+    }
 
     schedule();
 
     panic("thread: exited thread was rescheduled");
+}
+
+int thread_join(struct thread *t, void **retval) {
+    if (t == curthread) {
+        return -1;
+    }
+
+    uint64_t flags = spin_lock_irqsave(&sched_lock);
+
+    if (t->detached || t->joiners.head) {
+        spin_unlock_irqrestore(&sched_lock, flags);
+        return -1;
+    }
+
+    while (t->state != THREAD_ZOMBIE) {
+        waitq_sleep(&t->joiners);
+    }
+    if (retval) {
+        *retval = t->retval;
+    }
+    make_reapable(t);
+
+    spin_unlock_irqrestore(&sched_lock, flags);
+
+    thread_reap();
+    return 0;
+}
+
+int thread_detach(struct thread *t) {
+    uint64_t flags = spin_lock_irqsave(&sched_lock);
+
+    int ok = !t->detached;
+    if (ok) {
+        t->detached = 1;
+        if (t->state == THREAD_ZOMBIE) {
+            make_reapable(t);
+        }
+    }
+
+    spin_unlock_irqrestore(&sched_lock, flags);
+    return ok ? 0 : -1;
 }
 
 void thread_reap() {

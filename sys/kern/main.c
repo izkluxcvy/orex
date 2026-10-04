@@ -4,17 +4,24 @@
 #include <console.h>
 #include <machdep.h>
 #include <mm.h>
+#include <mutex.h>
 #include <printf.h>
 #include <sched.h>
 #include <thread.h>
 
-static void *chatter(void *arg) {
-    for (int i = 0; i < 5; i++) {
-        printf("%s%d ", (const char *)arg, i);
-        for (volatile int spin = 0; spin < 30000000; spin++) {
+static struct mutex  lock;
+static volatile long counter;
+
+static void *count(void *arg) {
+    for (int i = 0; i < 100000; i++) {
+        mutex_lock(&lock);
+        long tmp = counter;
+        for (volatile int spin = 0; spin < 1000; spin++) {
         }
+        counter = tmp + 1;
+        mutex_unlock(&lock);
     }
-    return nullptr;
+    return arg;
 }
 
 void kern_main(struct boot_info *boot_info) {
@@ -26,10 +33,15 @@ void kern_main(struct boot_info *boot_info) {
     sched_init();
     machdep_init_late();
 
-    thread_create("a", chatter, "a", SCHED_OTHER, 0);
-    thread_create("b", chatter, "b", SCHED_OTHER, 0);
-    thread_create("c", chatter, "c", SCHED_OTHER, 0);
-    while (1) {
-        __asm__ __volatile__("hlt");
+    mutex_init(&lock);
+    struct thread *workers[3];
+    for (long i = 0; i < 3; i++) {
+        workers[i] = thread_create("count", count, (void *)i, SCHED_OTHER, 0);
     }
+    for (int i = 0; i < 3; i++) {
+        void *ret;
+        thread_join(workers[i], &ret);
+        printf("orex: worker %ld is done\n", (long)ret);
+    }
+    printf("orex: counter is %ld\n", counter);
 }

@@ -5,9 +5,12 @@
 
 #include <cpu.h>
 #include <sched.h>
+#include <waitq.h>
 
 #define THREAD_NAME_MAX   16
 #define THREAD_STACK_SIZE (16 * 1024)
+
+struct mutex;
 
 typedef int tid_t;
 
@@ -29,6 +32,7 @@ struct thread {
     enum thread_state state;
     int               policy;
     int               priority;
+    int               base_priority;
     uint32_t          slice;
 
     thread_entry_t entry;
@@ -37,6 +41,12 @@ struct thread {
 
     void  *stack; // kernel stack
     size_t stack_size;
+
+    struct mutex *blocked_on;
+    struct mutex *held;
+
+    int          detached;
+    struct waitq joiners;
 
     struct thread *next, *prev;
 };
@@ -47,6 +57,8 @@ struct thread *thread_create(const char *name, thread_entry_t entry, void *arg,
                              int policy, int priority);
 [[noreturn]] void thread_exit(void *retval);
 [[noreturn]] void thread_exit_locked(void *retval);
+int               thread_join(struct thread *t, void **retval);
+int               thread_detach(struct thread *t);
 void              thread_yield();
 void              thread_reap();
 

@@ -17,11 +17,13 @@ struct thread;
 
 int sched_get_priority_min(int policy);
 int sched_get_priority_max(int policy);
+int sched_setscheduler(struct thread *t, int policy, int priority);
 
 extern struct spinlock sched_lock;
 
 void sched_init();
 void sched_enqueue(struct thread *t);
+void sched_set_priority(struct thread *t, int priority);
 void schedule();
 
 void sched_unlock_new_thread();

@@ -1,6 +1,7 @@
 #include <stdint.h>
 
 #include <cpu.h>
+#include <mutex.h>
 #include <printf.h>
 #include <sched.h>
 #include <spinlock.h>
@@ -59,6 +60,48 @@ static int runq_highest_priority() {
         }
     }
     return -1;
+}
+
+void sched_set_priority(struct thread *t, int priority) {
+    if (t->priority == priority) {
+        return;
+    }
+
+    if (t->state == THREAD_READY && t != curcpu()->idle) {
+        runq_unlink(t);
+        t->priority = priority;
+        sched_enqueue(t);
+        return;
+    }
+
+    t->priority = priority;
+    if (t->state == THREAD_RUNNING && runq_highest_priority() > priority) {
+        for (int i = 0; i < ncpu; i++) {
+            if (cpus[i].thread == t) {
+                kick(&cpus[i]);
+            }
+        }
+    }
+}
+
+int sched_setscheduler(struct thread *t, int policy, int priority) {
+    if (policy != SCHED_OTHER && policy != SCHED_FIFO && policy != SCHED_RR) {
+        return -1;
+    }
+
+    if (priority < sched_get_priority_min(policy) ||
+        priority > sched_get_priority_max(policy)) {
+        return -1;
+    }
+
+    uint64_t flags   = spin_lock_irqsave(&sched_lock);
+    t->policy        = policy;
+    t->base_priority = priority;
+    mutex_pi_update(t);
+    spin_unlock_irqrestore(&sched_lock, flags);
+
+    sched_preempt();
+    return 0;
 }
 
 static void runq_append(struct thread *t) {
