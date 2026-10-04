@@ -1,6 +1,7 @@
 #include <stdint.h>
 
 #include <printf.h>
+#include <sched.h>
 
 #include "apic.h"
 #include "irq.h"
@@ -38,4 +39,6 @@ void irq_dispatch(struct trapframe *tf) {
     }
 
     apic_eoi();
+
+    sched_preempt();
 }

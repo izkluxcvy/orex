@@ -2,6 +2,7 @@
 #include <ktime.h>
 #include <machdep.h>
 #include <printf.h>
+#include <sched.h>
 
 #include "apic.h"
 #include "irq.h"
@@ -16,6 +17,7 @@ static void timer_handler(struct trapframe *tf) {
     if (curcpu()->id == 0) {
         ticks++;
     }
+    sched_tick();
 }
 
 uint64_t machdep_ticks() { return ticks; }

@@ -14,6 +14,8 @@ struct cpu {
     struct thread *thread;
     int            id;
     uint32_t       apic_id;
+    struct thread *idle;
+    volatile int   need_resched;
     int            nlocks;
     const char    *locks[8];
 };
@@ -26,8 +28,17 @@ static_assert(offsetof(struct cpu, thread) == 24);
 extern struct cpu cpus[MAX_CPUS];
 extern int        ncpu;
 
+// TODO: avoid arch depends
 static inline struct cpu *curcpu() {
     struct cpu *c;
     __asm__ __volatile__("mov %0, gs:[16]" : "=r"(c));
     return c;
 }
+
+static inline struct thread *curthread_load() {
+    struct thread *t;
+    __asm__ __volatile__("mov %0, gs:[24]" : "=r"(t));
+    return t;
+}
+
+#define curthread (curthread_load())
