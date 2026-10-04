@@ -16,3 +16,26 @@ void memset(void *dest, int value, size_t n) {
     __asm__ __volatile__("rep stosq" : "+D"(dest), "+c"(q) : "a"(v) : "memory");
     __asm__ __volatile__("rep stosb" : "+D"(dest), "+c"(r) : "a"(v) : "memory");
 }
+
+void *memmove(void *dest, const void *src, size_t n) {
+    uint8_t       *d = dest;
+    const uint8_t *s = src;
+    if (d <= s || d >= s + n) {
+        return memcpy(dest, src, n);
+    }
+
+    uint8_t       *de = d + n - 1;
+    const uint8_t *se = s + n - 1;
+    size_t         q = n / 8, r = n % 8;
+    __asm__ __volatile__("std\n\t"
+                         "rep movsb\n\t"
+                         "sub rdi, 7\n\t"
+                         "sub rsi, 7\n\t"
+                         "mov rcx, %3\n\t"
+                         "rep movsq\n\t"
+                         "cld"
+                         : "+D"(de), "+S"(se), "+c"(r)
+                         : "r"(q)
+                         : "memory", "cc");
+    return dest;
+}

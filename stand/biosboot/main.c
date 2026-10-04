@@ -312,6 +312,77 @@ static uint64_t fat_file(const char name[11], uint8_t *buf, uint64_t max) {
     return 0;
 }
 
+#define VBE_INFO  0x7000
+#define MODE_INFO 0x7400
+
+static void vbe_init() {
+    uint8_t *vi = (uint8_t *)VBE_INFO;
+    memcpy(vi, "VBE2", 4);
+    struct bregs r = {.eax = 0x4F00, .edi = VBE_INFO};
+    bios_call(0x10, &r);
+    if ((r.eax & 0xFFFF) != 0x004F || !memeq(vi, "VESA", 4)) {
+        printf("stage2: no VBE\n");
+        return;
+    }
+    uint32_t  fp = *(uint32_t *)(vi + 14);
+    uint16_t *modes =
+        (uint16_t *)(uintptr_t)(((fp >> 16) << 4) + (fp & 0xFFFF));
+    int      best = -1, best_score = -1;
+    uint16_t list[256];
+    int      nmodes = 0;
+    for (; *modes != 0xFFFF && nmodes < 256; modes++) {
+        list[nmodes++] = *modes;
+    }
+    for (int i = 0; i < nmodes; i++) {
+        struct bregs q = {.eax = 0x4F01, .ecx = list[i], .edi = MODE_INFO};
+        bios_call(0x10, &q);
+        const uint8_t *m    = (uint8_t *)MODE_INFO;
+        uint16_t       attr = *(uint16_t *)m;
+        uint16_t       w    = *(uint16_t *)(m + 18);
+        uint16_t       h    = *(uint16_t *)(m + 20);
+        if ((q.eax & 0xFFFF) != 0x004F || (attr & 0x91) != 0x91 ||
+            m[25] != 32 || m[27] != 6) {
+            continue; // supported, graphics, linear, 32bpp, direct color
+        }
+        int score = w == 1024 && h == 768  ? 3
+                    : w == 800 && h == 600 ? 2
+                    : w <= 1280            ? 1
+                                           : 0;
+        if (score > best_score) {
+            best = i, best_score = score;
+        }
+    }
+    if (best < 0) {
+        printf("stage2: no suitable VBE mode\n");
+        return;
+    }
+
+    struct bregs q = {.eax = 0x4F01, .ecx = list[best], .edi = MODE_INFO};
+    bios_call(0x10, &q);
+    const uint8_t *m     = (uint8_t *)MODE_INFO;
+    uint16_t       w     = *(uint16_t *)(m + 18);
+    uint16_t       h     = *(uint16_t *)(m + 20);
+    uint16_t       pitch = *(uint16_t *)(m + 16);
+    uint32_t       base  = *(uint32_t *)(m + 40);
+    printf("stage2: VBE mode %dx%d, pitch=%d, base=%x\n", w, h, pitch, base);
+    struct bregs s = {.eax = 0x4F02, .ebx = list[best] | 0x4000u};
+    bios_call(0x10, &s);
+    if ((s.eax & 0xFFFF) != 0x004F) {
+        printf("stage2: failed to set VBE mode\n");
+        return;
+    }
+
+    text_screen = 0;
+    int red_at  = m[32];
+    info.fb     = (struct framebuffer){.base                = base,
+                                       .size                = (size_t)pitch * h,
+                                       .width               = w,
+                                       .height              = h,
+                                       .pixels_per_scanline = pitch / 4,
+                                       .pixel_format        = red_at == 16 ? 1 : 0};
+    ranges[nranges++] = (struct mem_range){base, (size_t)pitch * h};
+}
+
 static uintptr_t find_rsdp() {
     uintptr_t ebda       = (uintptr_t)(*(uint16_t *)0x40e) << 4;
     uintptr_t where[][2] = {{ebda, ebda + 1024}, {0xe0000, 0x100000}};
@@ -367,6 +438,7 @@ void stage2_main(uint8_t boot_drive) {
         printf("stage2: initrd.img loaded, %u bytes\n", (unsigned)initrd_size);
     }
 
+    vbe_init();
     build_map();
     info.memmap           = map;
     info.memmap_count     = nmap;

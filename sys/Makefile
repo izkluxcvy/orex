@@ -20,6 +20,7 @@ SRCS += arch/$(ARCH)/entry.c arch/$(ARCH)/init.c arch/$(ARCH)/serial.c \
 		arch/$(ARCH)/mem_.c arch/$(ARCH)/gdt.c arch/$(ARCH)/idt.c \
 		arch/$(ARCH)/trap.c arch/$(ARCH)/pmap.c
 SRCS += mm/init.c mm/pmm.c mm/kmalloc.c
+SRCS += dev/console.c
 SRCS += lib/printf.c
 OBJS := $(SRCS:.c=.o)
 
