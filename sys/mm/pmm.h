@@ -8,7 +8,11 @@
 #define PAGE_SIZE 0x1000ull
 
 struct page {
-    uint32_t refs;
+    uint32_t     refs;
+    uint16_t     slab_class;
+    uint16_t     inuse;
+    void        *free_list;
+    struct page *next;
 };
 
 void         pmm_init(const struct memmap_entry *memmap, size_t count);
