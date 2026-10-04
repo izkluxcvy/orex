@@ -10,6 +10,16 @@ extern void kern_main(struct boot_info *boot_info);
 
 __attribute__((naked)) void _start() {
     __asm__ __volatile__("mov rsp, [rip + kstack_top]\n\t"
+
+                         "mov r12, rdi\n\t"
+                         "lea rax, [rip + cpus]\n\t"
+                         "mov [rax + 16], rax\n\t"
+                         "mov rdx, rax\n\t"
+                         "shr rdx, 32\n\t"
+                         "mov ecx, 0xC0000101\n\t"
+                         "wrmsr\n\t"
+                         "mov rdi, r12\n\t"
+
                          "call kern_main\n\t"
                          "halt_loop:\n\t"
                          "cli\n\t"

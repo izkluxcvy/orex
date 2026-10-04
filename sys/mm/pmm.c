@@ -3,9 +3,12 @@
 
 #include <boot_info.h>
 #include <memset.h>
+#include <spinlock.h>
 
 #include "pmap.h"
 #include "pmm.h"
+
+static struct spinlock pmm_lock = {.name = "pmm"};
 
 static uintptr_t free_list;
 static uint64_t  free_page_count;
@@ -67,12 +70,16 @@ void pmm_init(const struct memmap_entry *memmap, size_t count) {
 }
 
 uintptr_t pmm_alloc_page_dirty() {
+    uint64_t flags = spin_lock_irqsave(&pmm_lock);
+
     uintptr_t pa = free_list;
     if (pa) {
         free_list = *link_of(pa);
         free_page_count--;
         *pmm_page(pa) = (struct page){.refs = 1};
     }
+
+    spin_unlock_irqrestore(&pmm_lock, flags);
     return pa;
 }
 
@@ -89,9 +96,14 @@ void pmm_free_page(uintptr_t pa) {
     if (pg) {
         *pg = (struct page){.refs = 0};
     }
+
+    uint64_t flags = spin_lock_irqsave(&pmm_lock);
+
     *link_of(pa) = free_list;
     free_list    = pa;
     free_page_count++;
+
+    spin_unlock_irqrestore(&pmm_lock, flags);
 }
 
 size_t pmm_free_pages() { return free_page_count; }

@@ -13,6 +13,9 @@ struct cpu {
     struct cpu    *self;
     struct thread *thread;
     int            id;
+    uint32_t       apic_id;
+    int            nlocks;
+    const char    *locks[8];
 };
 
 static_assert(offsetof(struct cpu, kernel_rsp) == 0);

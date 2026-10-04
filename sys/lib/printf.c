@@ -1,9 +1,36 @@
 #include <stdarg.h>
 
+#include <cpu.h>
 #include <printf.h>
+
+#include "irq.h"
 
 static void (*sinks[PRINTF_MAX_SINKS])(char c);
 static int sink_count;
+
+static volatile int out_cpu = -1;
+
+static int out_lock(uint64_t *flags) {
+    *flags = irq_save();
+    int me = curcpu()->id;
+    if (out_cpu == me) {
+        return 0;
+    }
+    int free = -1;
+    while (!__atomic_compare_exchange_n(&out_cpu, &free, me, 0,
+                                        __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) {
+        free = -1;
+        __asm__ __volatile__("pause");
+    }
+    return 1;
+}
+
+static void out_unlock(int taken, uint64_t flags) {
+    if (taken) {
+        __atomic_store_n(&out_cpu, -1, __ATOMIC_RELEASE);
+    }
+    irq_restore(flags);
+}
 
 void printf_add_sink(void (*putc)(char c)) {
     if (sink_count < PRINTF_MAX_SINKS) {
@@ -35,6 +62,9 @@ static void print_int(unsigned long val, int base, int width, char pad) {
 }
 
 void vprintf(const char *fmt, va_list args) {
+    uint64_t flags;
+    int      taken = out_lock(&flags);
+
     for (char *p = (char *)fmt; *p; p++) {
         if (*p == '\n') {
             emit('\r');
@@ -99,6 +129,7 @@ void vprintf(const char *fmt, va_list args) {
         }
         }
     }
+    out_unlock(taken, flags);
 }
 
 void printf(const char *fmt, ...) {

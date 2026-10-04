@@ -2,6 +2,7 @@
 #include <stdint.h>
 
 #include <kmalloc.h>
+#include <spinlock.h>
 
 #include "pmap.h"
 #include "pmm.h"
@@ -13,8 +14,9 @@
 #define SMALL_MAX   (1u << (MIN_SHIFT + NCLASS - 1))
 #define HDR         16
 
-static struct page *partial[NCLASS];
-static int          nempty[NCLASS];
+static struct spinlock kmalloc_lock = {.name = "kmalloc"};
+static struct page    *partial[NCLASS];
+static int             nempty[NCLASS];
 
 struct range {
     uintptr_t     start, pages;
@@ -199,7 +201,12 @@ void *kmalloc(size_t size) {
     if (size == 0) {
         return nullptr;
     }
+
+    uint64_t flags = spin_lock_irqsave(&kmalloc_lock);
+
     void *p = size <= SMALL_MAX ? small_alloc(class_of(size)) : big_alloc(size);
+
+    spin_unlock_irqrestore(&kmalloc_lock, flags);
     return p;
 }
 
@@ -207,9 +214,14 @@ void kfree(void *ptr) {
     if (!ptr) {
         return;
     }
+
+    uint64_t flags = spin_lock_irqsave(&kmalloc_lock);
+
     if ((uintptr_t)ptr >= KHEAP_BASE && (uintptr_t)ptr < KHEAP_LIMIT) {
         big_free(ptr);
     } else {
         small_free(pmm_page(kvirt_to_phys(ptr)), ptr);
     }
+
+    spin_unlock_irqrestore(&kmalloc_lock, flags);
 }

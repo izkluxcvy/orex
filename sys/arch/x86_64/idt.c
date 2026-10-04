@@ -3,6 +3,7 @@
 #include <panic.h>
 #include <printf.h>
 
+#include "irq.h"
 #include "segment.h"
 #include "trap.h"
 
@@ -78,6 +79,8 @@ void trap_handler(struct trapframe *tf) {
     if (tf->vector < 32) {
         dump_frame(tf);
         panic("CPU exception %lx in the kernel at %lx", tf->vector, tf->rip);
+    } else {
+        irq_dispatch(tf);
     }
 }
 
