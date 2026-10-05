@@ -1,6 +1,7 @@
 #include <stdint.h>
 
 #include <cpu.h>
+#include <ktime.h>
 #include <mutex.h>
 #include <printf.h>
 #include <sched.h>
@@ -173,6 +174,7 @@ void schedule() {
     }
 
     c->thread = next;
+    time_switch(prev, next);
     context_switch(&prev->rsp, next->rsp);
 
     thread_reap();

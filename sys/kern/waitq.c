@@ -41,6 +41,13 @@ void waitq_sleep(struct waitq *wq) {
     schedule();
 }
 
+int waitq_sleep_intr(struct waitq *wq) {
+    curthread->sleep_wq = wq;
+    waitq_sleep(wq);
+    curthread->sleep_wq = nullptr;
+    return 0;
+}
+
 static struct thread *waitq_take_highest(struct waitq *wq) {
     struct thread *best = wq->head;
     if (!best) {

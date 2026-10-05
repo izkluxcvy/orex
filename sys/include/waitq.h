@@ -10,6 +10,7 @@ struct waitq {
 void waitq_init(struct waitq *wq);
 
 void waitq_sleep(struct waitq *wq);
+int  waitq_sleep_intr(struct waitq *wq);
 
 void waitq_remove(struct waitq *wq, struct thread *t);
 

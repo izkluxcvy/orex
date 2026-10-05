@@ -5,6 +5,7 @@
 #include <sched.h>
 
 #include "apic.h"
+#include "cpufunc.h"
 #include "irq.h"
 #include "segment.h"
 #include "serial.h"
@@ -13,14 +14,16 @@
 static volatile uint64_t ticks;
 
 static void timer_handler(struct trapframe *tf) {
-    (void)tf;
     if (curcpu()->id == 0) {
         ticks++;
     }
+    time_tick(tf->cs & 3);
     sched_tick();
 }
 
 uint64_t machdep_ticks() { return ticks; }
+uint64_t machdep_cycles() { return rdtsc(); }
+uint64_t machdep_cycles_hz() { return tsc_hz; }
 
 void machdep_init() {
     serial_init();

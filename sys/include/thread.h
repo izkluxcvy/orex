@@ -45,8 +45,12 @@ struct thread {
     struct mutex *blocked_on;
     struct mutex *held;
 
-    int          detached;
-    struct waitq joiners;
+    uint64_t      cpu_ns;
+    uint64_t      start_ns;
+    int           timed_out;
+    int           detached;
+    struct waitq  joiners;
+    struct waitq *sleep_wq;
 
     struct thread *next, *prev;
 };
