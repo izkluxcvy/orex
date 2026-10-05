@@ -2,8 +2,12 @@
 
 #include <panic.h>
 #include <printf.h>
+#include <syscall.h>
+#include <thread.h>
+#include <uaccess.h>
 
 #include "irq.h"
+#include "pmap.h"
 #include "segment.h"
 #include "trap.h"
 
@@ -18,6 +22,7 @@ struct interrupt_descriptor {
 } __attribute__((packed));
 
 #define GATE_INTERRUPT 0x8E // present, ring 0, 64-bit interrupt gate
+#define GATE_USER      0x60
 
 static struct interrupt_descriptor idt[TRAP_VECTORS];
 
@@ -75,10 +80,50 @@ static void dump_frame(struct trapframe *tf) {
     }
 }
 
+[[noreturn]] static void user_fault(struct trapframe *tf) {
+    printf("trap: thread %d (%s): %s at 0x%lx\n", curthread->tid,
+           curthread->name, exception_names[tf->vector], tf->rip);
+    thread_exit(nullptr);
+}
+
+static int in_copy(struct trapframe *tf) {
+    return tf->rip >= (uintptr_t)__uaccess_begin &&
+           tf->rip < (uintptr_t)__uaccess_end;
+}
+
+static int kernel_user_fault(struct trapframe *tf) {
+    uint64_t cr2;
+    __asm__ __volatile__("mov %0, cr2" : "=r"(cr2));
+    if (cr2 >= USER_TOP) {
+        return 0;
+    }
+    if (in_copy(tf)) {
+        tf->rip = (uintptr_t)__uaccess_fixup;
+        return 1;
+    }
+    return 0;
+}
+
 void trap_handler(struct trapframe *tf) {
-    if (tf->vector < 32) {
-        dump_frame(tf);
-        panic("CPU exception %lx in the kernel at %lx", tf->vector, tf->rip);
+    if (tf->vector == TRAP_SYSCALL) {
+        curthread->frame = tf;
+        irq_enable();
+        tf->rax = (uint64_t)syscall_dispatch(
+            (long)tf->rax, (long)tf->rdi, (long)tf->rsi, (long)tf->rdx,
+            (long)tf->r10, (long)tf->r8, (long)tf->r9);
+        (void)irq_save();
+    } else if (tf->vector == 14 && kernel_user_fault(tf)) {
+        return;
+    } else if (tf->vector == 13 && in_copy(tf)) {
+        tf->rip = (uintptr_t)__uaccess_fixup;
+        return;
+    } else if (tf->vector < 32) {
+        if (!(tf->cs & 3)) {
+            dump_frame(tf);
+            panic("trap: unhandled CPU exception");
+        } else {
+            user_fault(tf);
+        }
     } else {
         irq_dispatch(tf);
     }
@@ -108,7 +153,7 @@ void idt_load() {
 
 void idt_init() {
     for (unsigned i = 0; i < TRAP_VECTORS; i++) {
-        set_gate(i, trap_stubs[i], 0);
+        set_gate(i, trap_stubs[i], i == 3 ? GATE_USER : 0);
     }
     idt_load();
 }

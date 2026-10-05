@@ -11,6 +11,7 @@
 #define THREAD_STACK_SIZE (16 * 1024)
 
 struct mutex;
+struct pmap;
 
 typedef int tid_t;
 
@@ -45,9 +46,12 @@ struct thread {
     struct mutex *blocked_on;
     struct mutex *held;
 
-    uint64_t      cpu_ns;
-    uint64_t      start_ns;
-    int           timed_out;
+    struct pmap *pmap;
+    void        *frame;
+    uint64_t     cpu_ns;
+    uint64_t     start_ns;
+    int          timed_out;
+
     int           detached;
     struct waitq  joiners;
     struct waitq *sleep_wq;

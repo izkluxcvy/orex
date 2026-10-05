@@ -3,10 +3,14 @@
 #include "trap.h"
 
 __attribute__((naked)) void trap_common() {
-    __asm__ __volatile__("push rax\n\t"
-                         "push rbx\n\t"
+    __asm__ __volatile__("test byte ptr [rsp + 24], 3\n\t"
+                         "jz 1f\n\t"
+                         "swapgs\n\t"
+                         "1:\n\t"
+                         "push rax\n\t"
                          "push rcx\n\t"
                          "push rdx\n\t"
+                         "push rbx\n\t"
                          "push rbp\n\t"
                          "push rsi\n\t"
                          "push rdi\n\t"
@@ -22,6 +26,9 @@ __attribute__((naked)) void trap_common() {
                          "mov rdi, rsp\n\t" // Pass trapframe pointer in RDI
                          "call trap_handler\n\t"
 
+                         ".global trap_return\n\t"
+                         "trap_return:\n\t"
+
                          "pop r15\n\t"
                          "pop r14\n\t"
                          "pop r13\n\t"
@@ -33,12 +40,16 @@ __attribute__((naked)) void trap_common() {
                          "pop rdi\n\t"
                          "pop rsi\n\t"
                          "pop rbp\n\t"
+                         "pop rbx\n\t"
                          "pop rdx\n\t"
                          "pop rcx\n\t"
-                         "pop rbx\n\t"
                          "pop rax\n\t"
 
                          "add rsp, 16\n\t" // Drop vector and error code
+                         "test byte ptr [rsp + 8], 3\n\t"
+                         "jz 2f\n\t"
+                         "swapgs\n\t"
+                         "2:\n\t"
                          "iretq");
 }
 

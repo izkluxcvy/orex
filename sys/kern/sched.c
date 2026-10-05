@@ -9,7 +9,9 @@
 #include <thread.h>
 
 #include "irq.h"
+#include "pmap.h"
 #include "switch.h"
+#include "user.h"
 
 struct runqueue {
     struct thread *head;
@@ -174,6 +176,10 @@ void schedule() {
     }
 
     c->thread = next;
+    if (next->stack) {
+        context_set_kstack((uint64_t)next->stack + next->stack_size);
+    }
+    pmap_activate(next->pmap ? next->pmap : &kernel_pmap);
     time_switch(prev, next);
     context_switch(&prev->rsp, next->rsp);
 

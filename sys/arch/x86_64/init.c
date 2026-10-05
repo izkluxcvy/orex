@@ -10,6 +10,7 @@
 #include "segment.h"
 #include "serial.h"
 #include "trap.h"
+#include "user.h"
 
 static volatile uint64_t ticks;
 
@@ -29,6 +30,7 @@ void machdep_init() {
     serial_init();
     gdt_init();
     idt_init();
+    syscall_init();
     printf("machdep: initialized\n");
 }
 

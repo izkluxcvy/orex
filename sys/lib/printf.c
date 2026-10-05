@@ -44,6 +44,18 @@ static void emit(char c) {
     }
 }
 
+void printf_write(const char *s, size_t n) {
+    uint64_t flags;
+    int      taken = out_lock(&flags);
+    for (size_t i = 0; i < n; i++) {
+        if (s[i] == '\n') {
+            emit('\r');
+        }
+        emit(s[i]);
+    }
+    out_unlock(taken, flags);
+}
+
 const char *digits = "0123456789abcdef";
 static void print_int(unsigned long val, int base, int width, char pad) {
     char  buf[32];

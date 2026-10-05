@@ -2,9 +2,11 @@
 #include <stdint.h>
 
 #include <boot_info.h>
+#include <kmalloc.h>
 
 #include "../../mm/pmm.h"
 #include "cpufunc.h"
+#include "irq.h"
 #include "msr.h"
 #include "pmap.h"
 
@@ -13,6 +15,7 @@
 #define PAGE_2M     0x200000ull
 
 #define EFER_NXE (1ull << 11)
+#define CR0_WP   (1ULL << 16)
 
 struct pmap     kernel_pmap;
 uintptr_t       dmap_offset;
@@ -99,6 +102,10 @@ uint64_t pmap_remove(struct pmap *pm, uintptr_t va) {
     return old;
 }
 
+uint64_t pmap_user_flags(int write, int exec) {
+    return PMAP_USER | (write ? PMAP_WRITE : 0) | (exec ? 0 : nx_bit);
+}
+
 int pmap_kenter(uintptr_t va, uintptr_t pa, uint64_t flags) {
     return pmap_enter(&kernel_pmap, va, pa, flags);
 }
@@ -166,8 +173,15 @@ static void enable_nx() {
     }
 }
 
+static void enable_wp() {
+    uint64_t cr0;
+    __asm__ __volatile__("mov %0, cr0" : "=r"(cr0));
+    __asm__ __volatile__("mov cr0, %0" : : "r"(cr0 | CR0_WP));
+}
+
 void pmap_bootstrap(const struct boot_info *bi) {
     enable_nx();
+    enable_wp();
     uint64_t *boot = phys_to_virt(read_cr3() & PMAP_ADDR);
 
     uintptr_t pml4_pa = pmm_alloc_page();
@@ -186,4 +200,97 @@ void pmap_bootstrap(const struct boot_info *bi) {
     kernel_pmap.pml4 = pml4_pa;
     dmap_offset      = DMAP_BASE;
     write_cr3(pml4_pa);
+}
+
+struct pmap *pmap_create() {
+    struct pmap *pm = kmalloc(sizeof(*pm));
+    if (!pm) {
+        return nullptr;
+    }
+    pm->pml4 = pmm_alloc_page();
+    if (!pm->pml4) {
+        kfree(pm);
+        return nullptr;
+    }
+
+    uint64_t *dst = phys_to_virt(pm->pml4);
+    uint64_t *src = phys_to_virt(kernel_pmap.pml4);
+    for (unsigned i = KERNEL_HALF; i < ENTRIES; i++) {
+        dst[i] = src[i];
+    }
+    return pm;
+}
+
+static int walk_user(struct pmap *pm,
+                     int (*fn)(uintptr_t va, uint64_t *pte, void *ctx),
+                     void *ctx, int free_tables) {
+    uint64_t *pml4 = phys_to_virt(pm->pml4);
+
+    for (unsigned i = 0; i < KERNEL_HALF; i++) {
+        if (!(pml4[i] & PMAP_PRESENT)) {
+            continue;
+        }
+        uint64_t *pdpt = table_of(pml4[i]);
+        for (unsigned j = 0; j < ENTRIES; j++) {
+            if (!(pdpt[j] & PMAP_PRESENT)) {
+                continue;
+            }
+            uint64_t *pd = table_of(pdpt[j]);
+            for (unsigned k = 0; k < ENTRIES; k++) {
+                if (!(pd[k] & PMAP_PRESENT)) {
+                    continue;
+                }
+                uint64_t *pt = table_of(pd[k]);
+                for (unsigned l = 0; l < ENTRIES; l++) {
+                    if (!(pt[l] & PMAP_PRESENT)) {
+                        continue;
+                    }
+                    uintptr_t va = ((uintptr_t)i << 39) | ((uintptr_t)j << 30) |
+                                   ((uintptr_t)k << 21) | ((uintptr_t)l << 12);
+                    if (fn(va, &pt[l], ctx) != 0) {
+                        return -1;
+                    }
+                }
+                if (free_tables) {
+                    pmm_free_page(pd[k] & PMAP_ADDR);
+                }
+            }
+            if (free_tables) {
+                pmm_free_page(pdpt[j] & PMAP_ADDR);
+            }
+        }
+        if (free_tables) {
+            pmm_free_page(pm->pml4 & PMAP_ADDR);
+            pml4[i] = 0;
+        }
+    }
+    return 0;
+}
+
+static int free_leaf(uintptr_t va, uint64_t *pte, void *ctx) {
+    (void)va, (void)ctx;
+    pmm_page_unref(*pte & PMAP_ADDR);
+    return 0;
+}
+
+void pmap_clear_user(struct pmap *pm) {
+    walk_user(pm, free_leaf, nullptr, 1);
+    uint64_t flags = irq_save();
+    // If the current CR3 is the one we just cleared, reload it to flush TLB.
+    if ((read_cr3() & PMAP_ADDR) == pm->pml4) {
+        write_cr3(pm->pml4);
+    }
+    irq_restore(flags);
+}
+
+void pmap_destroy(struct pmap *pm) {
+    pmap_clear_user(pm);
+    pmm_free_page(pm->pml4);
+    kfree(pm);
+}
+
+void pmap_activate(struct pmap *pm) {
+    if ((read_cr3() & PMAP_ADDR) != pm->pml4) {
+        write_cr3(pm->pml4);
+    }
 }
