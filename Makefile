@@ -1,7 +1,7 @@
 BASEDIR := .
 include common.mk
 
-SUBDIRS := stand sys
+SUBDIRS := stand sys user
 
 DISK := $(BINDIR)/disk.img
 MKDISK := python3 stand/tools/mkdisk.py
@@ -17,7 +17,8 @@ $(SUBDIRS):
 disk: all
 	test -f $(BINDIR)/cmdline.txt || echo "console=ttyS0" > $(BINDIR)/cmdline.txt
 	$(MKDISK) $(DISK) --mbr $(BINDIR)/bootmbr.bin --stage2 $(BINDIR)/bootbios.bin \
-		KERNEL.ELF=$(BINDIR)/kernel.elf CMDLINE.TXT=$(BINDIR)/cmdline.txt
+		KERNEL.ELF=$(BINDIR)/kernel.elf CMDLINE.TXT=$(BINDIR)/cmdline.txt \
+		INITRD.IMG=$(BINDIR)/initramfs.cpio
 
 run: disk
 	qemu-system-$(ARCH) -m 1G -drive format=raw,file=$(DISK) -serial stdio

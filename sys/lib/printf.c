@@ -40,6 +40,9 @@ void printf_add_sink(void (*putc)(char c)) {
 
 static void emit(char c) {
     for (int i = 0; i < sink_count; i++) {
+        if (c == '\n') {
+            sinks[i]('\r');
+        }
         sinks[i](c);
     }
 }
@@ -48,9 +51,6 @@ void printf_write(const char *s, size_t n) {
     uint64_t flags;
     int      taken = out_lock(&flags);
     for (size_t i = 0; i < n; i++) {
-        if (s[i] == '\n') {
-            emit('\r');
-        }
         emit(s[i]);
     }
     out_unlock(taken, flags);
@@ -78,9 +78,6 @@ void vprintf(const char *fmt, va_list args) {
     int      taken = out_lock(&flags);
 
     for (char *p = (char *)fmt; *p; p++) {
-        if (*p == '\n') {
-            emit('\r');
-        }
         if (*p != '%') {
             emit(*p);
             continue;

@@ -7,8 +7,10 @@
 #include <memcpy.h>
 #include <mm.h>
 #include <printf.h>
+#include <ramfs.h>
 #include <sched.h>
 #include <thread.h>
+#include <vfs.h>
 
 #include "../mm/pmm.h"
 #include "irq.h"
@@ -58,6 +60,35 @@ void kern_main(struct boot_info *boot_info) {
     sched_init();
     machdep_init_late();
     time_init();
+
+    struct fs *root = nullptr;
+    if (bi.initrd_size) {
+        root = ramfs_create(phys_to_virt(bi.initrd_base), bi.initrd_size);
+        printf("orex: root is the initrd, %lu bytes\n",
+               (unsigned long)bi.initrd_size);
+    } else {
+        printf("orex: no disk to be the root\n");
+    }
+    if (!root || vfs_mount_root(root) != 0) {
+        printf("orex: cannot mount root filesystem\n");
+    }
+
+    struct vnode *vn;
+    if (vfs_lookup(nullptr, "/etc/motd", VFS_FOLLOW, &vn) == 0) {
+        char buf[128];
+        long n             = vnode_read(vn, buf, sizeof(buf) - 1, 0);
+        buf[n > 0 ? n : 0] = '\0';
+        printf("orex: /etc/motd:\n%s", buf);
+        vnode_put(vn);
+    }
+    if (vfs_lookup(nullptr, "/etc/..", VFS_FOLLOW, &vn) == 0) {
+        struct vfs_dirent de;
+        uint64_t          pos = 0;
+        while (vn->fs->vops->readdir(vn, &pos, &de) > 0) {
+            printf("orex: in the root: %s\n", de.name);
+        }
+        vnode_put(vn);
+    }
 
     struct pmap   *pm = pmap_create();
     struct thread *t  = thread_create("user", user_thread, pm, SCHED_OTHER, 0);

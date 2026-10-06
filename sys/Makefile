@@ -16,7 +16,8 @@ INCLUDE := -I../stand/include -Iinclude -Iarch/$(ARCH)
 LDFLAGS := -T arch/$(ARCH)/kernel.ld -z norelro --image-base=0x100000 --static
 
 SRCS := kern/main.c kern/cpu.c kern/panic.c kern/spinlock.c kern/thread.c \
-		kern/sched.c kern/waitq.c kern/mutex.c kern/time.c kern/syscall.c
+		kern/sched.c kern/waitq.c kern/mutex.c kern/time.c kern/syscall.c \
+		kern/vfs.c
 SRCS += arch/$(ARCH)/entry.c arch/$(ARCH)/init.c arch/$(ARCH)/serial.c \
 		arch/$(ARCH)/mem_.c arch/$(ARCH)/gdt.c arch/$(ARCH)/idt.c \
 		arch/$(ARCH)/trap.c arch/$(ARCH)/pmap.c arch/$(ARCH)/irq.c \
@@ -24,7 +25,8 @@ SRCS += arch/$(ARCH)/entry.c arch/$(ARCH)/init.c arch/$(ARCH)/serial.c \
 		arch/$(ARCH)/uaccess.c arch/$(ARCH)/user.c
 SRCS += mm/init.c mm/pmm.c mm/kmalloc.c
 SRCS += dev/console.c
-SRCS += lib/printf.c
+SRCS += fs/ramfs.c
+SRCS += lib/printf.c lib/memcmp.c
 OBJS := $(SRCS:.c=.o)
 
 .PHONY: all

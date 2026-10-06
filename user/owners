@@ -1,0 +1,2 @@
+# Who owns what in the root, for the initramfs and the disk alike: path uid gid.
+# Everything not listed is root's.
