@@ -12,52 +12,7 @@
 #include <thread.h>
 #include <vfs.h>
 
-#include "../mm/pmm.h"
 #include "pmap.h"
-
-extern const uint8_t user_blob[], user_blob_end[];
-__asm__(".section .rodata\n"
-        "user_blob:\n"
-        "    mov eax, 1\n"
-        "    mov edi, 1\n"
-        "    lea rsi, [rip + 1f]\n"
-        "    mov edx, 18\n"
-        "    syscall\n"
-
-        "    mov byte ptr [rsp - 0x20000], 1\n"
-        "    mov eax, 12\n"
-        "    xor edi, edi\n"
-        "    syscall\n"
-
-        "    lea rdi, [rax + 0x3000]\n"
-        "    mov eax, 12\n"
-        "    syscall\n"
-
-        "    mov byte ptr [rax - 1], 1\n"
-        "    mov eax, 9\n"
-        "    xor edi, edi\n"
-        "    mov esi, 0x2000\n"
-        "    mov edx, 3\n"
-        "    mov r10d, 0x22\n"
-        "    mov r8, -1\n"
-        "    xor r9d, r9d\n"
-        "    syscall\n"
-
-        "    mov byte ptr [rax], 1\n"
-        "    mov eax, 1\n"
-        "    mov edi, 1\n"
-        "    lea rsi, [rip + 2f]\n"
-        "    mov edx, 13\n"
-        "    syscall\n"
-
-        // "    mov eax, 60\n"
-        // "    mov edi, 3\n"
-        // "    syscall\n"
-        "    mov byte ptr [0x1000], 1\n"
-        "1: .ascii \"hello from ring 3\\n\"\n"
-        "2: .ascii \"memory works\\n\"\n"
-        "user_blob_end:\n"
-        ".text\n");
 
 void kern_main(struct boot_info *boot_info) {
     struct boot_info bi = *boot_info;
@@ -81,11 +36,13 @@ void kern_main(struct boot_info *boot_info) {
         printf("main: cannot mount root filesystem\n");
     }
 
-    struct proc *p =
-        proc_spawn_blob(user_blob, (size_t)(user_blob_end - user_blob));
-    if (p) {
+    static const char *const argv[] = {"/bin/hello", "one", "two", nullptr};
+    static const char *const envp[] = {"PATH=/bin", nullptr};
+    struct proc             *p      = proc_spawn("/bin/hello", argv, envp);
+    if (!p) {
+        printf("main: cannot spawn /bin/hello\n");
+    } else {
         int status = proc_join(p);
-        printf("main: the program exited with status 0x%x; %lu pages free\n",
-               status, pmm_free_pages());
+        printf("main: /bin/hello exited with status %d\n", status);
     }
 }

@@ -385,3 +385,20 @@ long vnode_read(struct vnode *vn, void *buf, size_t n, uint64_t off) {
     }
     return (long)got;
 }
+
+int vfs_exec_check(struct vnode *vn) { return S_ISREG(vn->mode) ? 0 : -EACCES; }
+
+int vfs_exec_open(const char *path, struct vnode **out) {
+    struct vnode *vn;
+    int           err = vfs_lookup(nullptr, path, VFS_FOLLOW, &vn);
+    if (err) {
+        return err;
+    }
+    err = S_ISREG(vn->mode) ? 0 : -EACCES;
+    if (err) {
+        vnode_put(vn);
+        return err;
+    }
+    *out = vn;
+    return 0;
+}

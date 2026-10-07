@@ -99,3 +99,5 @@ struct vnode *vfs_root();
 
 int vfs_lookup(struct vnode *base, const char *path, int flags,
                struct vnode **out);
+int vfs_exec_open(const char *path, struct vnode **out);
+int vfs_exec_check(struct vnode *vn);

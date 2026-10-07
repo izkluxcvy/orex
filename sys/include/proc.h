@@ -3,6 +3,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+struct exec_args;
 struct thread;
 struct vmspace;
 
@@ -33,6 +34,7 @@ extern struct proc proc0;
 
 struct proc *curproc();
 
-struct proc      *proc_spawn_blob(const void *code, size_t len);
 int               proc_join(struct proc *p);
+struct proc      *proc_spawn(const char *path, const char *const *argv,
+                             const char *const *envp);
 [[noreturn]] void proc_exit(int status);
