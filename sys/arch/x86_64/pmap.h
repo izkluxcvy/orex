@@ -42,6 +42,7 @@ void         pmap_activate(struct pmap *pm);
 int pmap_enter(struct pmap *pm, uintptr_t va, uintptr_t pa, uint64_t flags);
 uint64_t pmap_pte(struct pmap *pm, uintptr_t va);
 uint64_t pmap_remove(struct pmap *pm, uintptr_t va);
+void     pmap_protect(struct pmap *pm, uintptr_t va, uint64_t flags);
 
 uint64_t pmap_user_flags(int write, int exec);
 

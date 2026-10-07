@@ -4,52 +4,60 @@
 #include <console.h>
 #include <ktime.h>
 #include <machdep.h>
-#include <memcpy.h>
 #include <mm.h>
 #include <printf.h>
+#include <proc.h>
 #include <ramfs.h>
 #include <sched.h>
 #include <thread.h>
 #include <vfs.h>
 
 #include "../mm/pmm.h"
-#include "irq.h"
 #include "pmap.h"
-#include "user.h"
 
 extern const uint8_t user_blob[], user_blob_end[];
 __asm__(".section .rodata\n"
         "user_blob:\n"
-        // "    mov rax, [0xffffffff81000000]\n"
         "    mov eax, 1\n"
         "    mov edi, 1\n"
         "    lea rsi, [rip + 1f]\n"
-        // "    mov rsi, 0xffffffff81000000\n"
         "    mov edx, 18\n"
         "    syscall\n"
-        "    mov eax, 60\n"
+
+        "    mov byte ptr [rsp - 0x20000], 1\n"
+        "    mov eax, 12\n"
         "    xor edi, edi\n"
         "    syscall\n"
+
+        "    lea rdi, [rax + 0x3000]\n"
+        "    mov eax, 12\n"
+        "    syscall\n"
+
+        "    mov byte ptr [rax - 1], 1\n"
+        "    mov eax, 9\n"
+        "    xor edi, edi\n"
+        "    mov esi, 0x2000\n"
+        "    mov edx, 3\n"
+        "    mov r10d, 0x22\n"
+        "    mov r8, -1\n"
+        "    xor r9d, r9d\n"
+        "    syscall\n"
+
+        "    mov byte ptr [rax], 1\n"
+        "    mov eax, 1\n"
+        "    mov edi, 1\n"
+        "    lea rsi, [rip + 2f]\n"
+        "    mov edx, 13\n"
+        "    syscall\n"
+
+        // "    mov eax, 60\n"
+        // "    mov edi, 3\n"
+        // "    syscall\n"
+        "    mov byte ptr [0x1000], 1\n"
         "1: .ascii \"hello from ring 3\\n\"\n"
+        "2: .ascii \"memory works\\n\"\n"
         "user_blob_end:\n"
         ".text\n");
-
-#define USER_CODE 0x400000UL
-
-static void *user_thread(void *arg) {
-    struct pmap *pm    = arg;
-    uintptr_t    code  = pmm_alloc_page();
-    uintptr_t    stack = pmm_alloc_page();
-    memcpy(phys_to_virt(code), user_blob, (size_t)(user_blob_end - user_blob));
-    pmap_enter(pm, USER_CODE, code, pmap_user_flags(0, 1));
-    pmap_enter(pm, USER_STACK_TOP - PAGE_SIZE, stack, pmap_user_flags(1, 0));
-
-    uint64_t flags  = irq_save();
-    curthread->pmap = pm;
-    pmap_activate(pm);
-    irq_restore(flags);
-    usermode_enter(USER_CODE, USER_STACK_TOP);
-}
 
 void kern_main(struct boot_info *boot_info) {
     struct boot_info bi = *boot_info;
@@ -64,37 +72,20 @@ void kern_main(struct boot_info *boot_info) {
     struct fs *root = nullptr;
     if (bi.initrd_size) {
         root = ramfs_create(phys_to_virt(bi.initrd_base), bi.initrd_size);
-        printf("orex: root is the initrd, %lu bytes\n",
+        printf("main: root is the initrd, %lu bytes\n",
                (unsigned long)bi.initrd_size);
     } else {
-        printf("orex: no disk to be the root\n");
+        printf("main: no disk to be the root\n");
     }
     if (!root || vfs_mount_root(root) != 0) {
-        printf("orex: cannot mount root filesystem\n");
+        printf("main: cannot mount root filesystem\n");
     }
 
-    struct vnode *vn;
-    if (vfs_lookup(nullptr, "/etc/motd", VFS_FOLLOW, &vn) == 0) {
-        char buf[128];
-        long n             = vnode_read(vn, buf, sizeof(buf) - 1, 0);
-        buf[n > 0 ? n : 0] = '\0';
-        printf("orex: /etc/motd:\n%s", buf);
-        vnode_put(vn);
+    struct proc *p =
+        proc_spawn_blob(user_blob, (size_t)(user_blob_end - user_blob));
+    if (p) {
+        int status = proc_join(p);
+        printf("main: the program exited with status 0x%x; %lu pages free\n",
+               status, pmm_free_pages());
     }
-    if (vfs_lookup(nullptr, "/etc/..", VFS_FOLLOW, &vn) == 0) {
-        struct vfs_dirent de;
-        uint64_t          pos = 0;
-        while (vn->fs->vops->readdir(vn, &pos, &de) > 0) {
-            printf("orex: in the root: %s\n", de.name);
-        }
-        vnode_put(vn);
-    }
-
-    struct pmap   *pm = pmap_create();
-    struct thread *t  = thread_create("user", user_thread, pm, SCHED_OTHER, 0);
-    thread_join(t, nullptr);
-    pmap_destroy(pm);
-    printf(
-        "orex: the program is gone, and its memory with it: %lu pages free\n",
-        pmm_free_pages());
 }

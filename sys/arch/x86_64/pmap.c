@@ -106,6 +106,14 @@ uint64_t pmap_user_flags(int write, int exec) {
     return PMAP_USER | (write ? PMAP_WRITE : 0) | (exec ? 0 : nx_bit);
 }
 
+void pmap_protect(struct pmap *pm, uintptr_t va, uint64_t flags) {
+    uint64_t *pte = pte_lookup(pm->pml4, va);
+    if (pte && (*pte & PMAP_PRESENT)) {
+        *pte = (*pte & PMAP_ADDR) | flags | PMAP_PRESENT;
+        invlpg(va);
+    }
+}
+
 int pmap_kenter(uintptr_t va, uintptr_t pa, uint64_t flags) {
     return pmap_enter(&kernel_pmap, va, pa, flags);
 }

@@ -12,6 +12,7 @@
 
 struct mutex;
 struct pmap;
+struct proc;
 
 typedef int tid_t;
 
@@ -46,6 +47,7 @@ struct thread {
     struct mutex *blocked_on;
     struct mutex *held;
 
+    struct proc *proc;
     struct pmap *pmap;
     void        *frame;
     uint64_t     cpu_ns;

@@ -1,10 +1,13 @@
 #include <stdint.h>
 
+#include <errno.h>
 #include <panic.h>
 #include <printf.h>
+#include <proc.h>
 #include <syscall.h>
 #include <thread.h>
 #include <uaccess.h>
+#include <vm.h>
 
 #include "irq.h"
 #include "pmap.h"
@@ -83,8 +86,26 @@ static void dump_frame(struct trapframe *tf) {
 [[noreturn]] static void user_fault(struct trapframe *tf) {
     printf("trap: thread %d (%s): %s at 0x%lx\n", curthread->tid,
            curthread->name, exception_names[tf->vector], tf->rip);
-    thread_exit(nullptr);
+    proc_exit(W_SIGNALED(tf->vector == 14 ? 11 : 4));
 }
+
+#define PF_WRITE 0x02
+#define PF_FETCH 0x10
+
+static int user_page_fault(struct trapframe *tf, uint64_t *addr) {
+    uint64_t cr2;
+    __asm__ __volatile__("mov %0, cr2" : "=r"(cr2));
+    *addr      = cr2;
+    int access = (tf->error_code & PF_WRITE)   ? PROT_WRITE
+                 : (tf->error_code & PF_FETCH) ? PROT_EXEC
+                                               : PROT_READ;
+    irq_enable();
+    int err = vm_fault(curproc()->vm, cr2, access);
+    (void)irq_save();
+    return err;
+}
+
+#define RFLAGS_IF 0x200
 
 static int in_copy(struct trapframe *tf) {
     return tf->rip >= (uintptr_t)__uaccess_begin &&
@@ -94,8 +115,17 @@ static int in_copy(struct trapframe *tf) {
 static int kernel_user_fault(struct trapframe *tf) {
     uint64_t cr2;
     __asm__ __volatile__("mov %0, cr2" : "=r"(cr2));
-    if (cr2 >= USER_TOP) {
+    if (cr2 >= USER_TOP || !curthread->proc) {
         return 0;
+    }
+    if (tf->rflags & RFLAGS_IF) {
+        int access = (tf->error_code & PF_WRITE) ? PROT_WRITE : PROT_READ;
+        irq_enable();
+        int err = vm_fault(curproc()->vm, cr2, access);
+        (void)irq_save();
+        if (!err) {
+            return 1;
+        }
     }
     if (in_copy(tf)) {
         tf->rip = (uintptr_t)__uaccess_fixup;
@@ -112,6 +142,13 @@ void trap_handler(struct trapframe *tf) {
             (long)tf->rax, (long)tf->rdi, (long)tf->rsi, (long)tf->rdx,
             (long)tf->r10, (long)tf->r8, (long)tf->r9);
         (void)irq_save();
+    } else if (tf->vector == 14 && (tf->cs & 3)) {
+        uint64_t addr;
+        int      err = user_page_fault(tf, &addr);
+        if (err) {
+            printf("trap: no page for 0x%lx\n", addr);
+            user_fault(tf);
+        }
     } else if (tf->vector == 14 && kernel_user_fault(tf)) {
         return;
     } else if (tf->vector == 13 && in_copy(tf)) {
