@@ -41,6 +41,7 @@ struct vmspace {
 struct vmspace *vm_create();
 void            vm_destroy(struct vmspace *vm);
 void            vm_clear(struct vmspace *vm);
+int             vm_copy(struct vmspace *dst, struct vmspace *src);
 
 int vm_map(struct vmspace *vm, uintptr_t start, uintptr_t end, int prot,
            struct vnode *vn, uint64_t off, uintptr_t file_end);

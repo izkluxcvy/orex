@@ -128,6 +128,33 @@ void vm_destroy(struct vmspace *vm) {
     kfree(vm);
 }
 
+static int copy_locked(struct vmspace *dst, struct vmspace *src) {
+    struct vm_area **tail = &dst->areas;
+    for (struct vm_area *a = src->areas; a; a = a->next) {
+        struct vm_area *b = kmalloc(sizeof(*b));
+        if (!b) {
+            return -ENOMEM;
+        }
+        *b      = *a;
+        b->next = nullptr;
+        area_dup(b);
+        *tail = b;
+        tail  = &b->next;
+    }
+    dst->brk_base  = src->brk_base;
+    dst->brk       = src->brk;
+    dst->stack_top = src->stack_top;
+    dst->mmap_top  = src->mmap_top;
+    return pmap_copy_user(dst->pmap, src->pmap) == 0 ? 0 : -ENOMEM;
+}
+
+int vm_copy(struct vmspace *dst, struct vmspace *src) {
+    mutex_lock(&src->lock);
+    int err = copy_locked(dst, src);
+    mutex_unlock(&src->lock);
+    return err;
+}
+
 static int mergeable(struct vm_area *a, int prot) {
     return a && !a->vn && a->prot == prot;
 }
@@ -247,6 +274,22 @@ static int fault_locked(struct vmspace *vm, uintptr_t va, int access) {
     uint64_t  flags = pte_flags(a->prot);
     uint64_t  pte   = pmap_pte(vm->pmap, page);
     if (pte & PMAP_PRESENT) {
+        uintptr_t old = pte & PMAP_ADDR;
+        // Copy on write
+        if (access == PROT_WRITE && !(pte & PMAP_WRITE) &&
+            pmm_page_refs(old) > 1) {
+            uintptr_t pa = pmm_alloc_page_dirty();
+            if (!pa) {
+                return -ENOMEM;
+            }
+            memcpy(phys_to_virt(pa), phys_to_virt(old), PAGE_SIZE);
+            if (pmap_enter(vm->pmap, page, pa, flags) != 0) {
+                pmm_free_page(pa);
+                return -ENOMEM;
+            }
+            pmm_page_unref(old);
+            return 0;
+        }
         pmap_protect(vm->pmap, page, flags);
         return 0;
     }

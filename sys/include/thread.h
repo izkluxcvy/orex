@@ -47,12 +47,13 @@ struct thread {
     struct mutex *blocked_on;
     struct mutex *held;
 
-    struct proc *proc;
-    struct pmap *pmap;
-    void        *frame;
-    uint64_t     cpu_ns;
-    uint64_t     start_ns;
-    int          timed_out;
+    struct proc   *proc;
+    struct thread *proc_next;
+    struct pmap   *pmap;
+    void          *frame;
+    uint64_t       cpu_ns;
+    uint64_t       start_ns;
+    int            timed_out;
 
     int           detached;
     struct waitq  joiners;

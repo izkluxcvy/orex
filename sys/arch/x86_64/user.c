@@ -1,9 +1,11 @@
 #include <stdint.h>
 
 #include <cpu.h>
+#include <thread.h>
 
 #include "msr.h"
 #include "segment.h"
+#include "switch.h"
 #include "trap.h"
 #include "user.h"
 
@@ -15,6 +17,7 @@
 #define SYSCALL_MASK 0x47700 // TF, IF, DF, IOPL, NT, AC
 
 void trap_common();
+void trap_return();
 
 // clang-format off
 __attribute__((naked)) static void syscall_entry() {
@@ -62,4 +65,30 @@ void usermode_enter(uint64_t rip, uint64_t rsp) {
                            "i"(USER_CS)
                          : "memory");
     __builtin_unreachable();
+}
+
+__attribute__((naked)) static void fork_trampoline() {
+    __asm__ __volatile__("call sched_unlock_new_thread\n\t"
+                         "cli\n\t"
+                         "add rsp, 8\n\t"
+                         "jmp trap_return");
+}
+
+void context_setup_fork(struct thread *child) {
+    uint8_t          *top = (uint8_t *)child->stack + child->stack_size;
+    struct trapframe *tf  = (struct trapframe *)top - 1;
+
+    *tf        = *(struct trapframe *)curthread->frame;
+    tf->rax    = 0;
+    child->rsp = context_setup(tf, fork_trampoline);
+}
+
+void context_exec(uint64_t rip, uint64_t rsp) {
+    *(struct trapframe *)curthread->frame = (struct trapframe){
+        .rip    = rip,
+        .cs     = USER_CS,
+        .rflags = RFLAGS_IF,
+        .rsp    = rsp,
+        .ss     = USER_DS,
+    };
 }

@@ -37,6 +37,7 @@ void pmap_bootstrap(const struct boot_info *bi);
 struct pmap *pmap_create(void);
 void         pmap_destroy(struct pmap *pm);
 void         pmap_clear_user(struct pmap *pm);
+int          pmap_copy_user(struct pmap *dst, struct pmap *src);
 void         pmap_activate(struct pmap *pm);
 
 int pmap_enter(struct pmap *pm, uintptr_t va, uintptr_t pa, uint64_t flags);

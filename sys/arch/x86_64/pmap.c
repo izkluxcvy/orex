@@ -109,6 +109,9 @@ uint64_t pmap_user_flags(int write, int exec) {
 void pmap_protect(struct pmap *pm, uintptr_t va, uint64_t flags) {
     uint64_t *pte = pte_lookup(pm->pml4, va);
     if (pte && (*pte & PMAP_PRESENT)) {
+        if (pmm_page_refs(*pte & PMAP_ADDR) > 1) {
+            flags &= ~PMAP_WRITE;
+        }
         *pte = (*pte & PMAP_ADDR) | flags | PMAP_PRESENT;
         invlpg(va);
     }
@@ -268,7 +271,7 @@ static int walk_user(struct pmap *pm,
             }
         }
         if (free_tables) {
-            pmm_free_page(pm->pml4 & PMAP_ADDR);
+            pmm_free_page(pml4[i] & PMAP_ADDR);
             pml4[i] = 0;
         }
     }
@@ -301,4 +304,23 @@ void pmap_activate(struct pmap *pm) {
     if ((read_cr3() & PMAP_ADDR) != pm->pml4) {
         write_cr3(pm->pml4);
     }
+}
+
+static int copy_leaf(uintptr_t va, uint64_t *pte, void *ctx) {
+    *pte &= ~PMAP_WRITE;
+    if (pmap_enter(ctx, va, *pte & PMAP_ADDR, *pte & ~PMAP_ADDR) != 0) {
+        return -1;
+    }
+    pmm_page_ref(*pte & PMAP_ADDR);
+    return 0;
+}
+
+int pmap_copy_user(struct pmap *dst, struct pmap *src) {
+    int      err   = walk_user(src, copy_leaf, dst, 0);
+    uint64_t flags = irq_save();
+    if ((read_cr3() & PMAP_ADDR) == src->pml4) {
+        write_cr3(src->pml4);
+    }
+    irq_restore(flags);
+    return err;
 }

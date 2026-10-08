@@ -36,13 +36,24 @@ void kern_main(struct boot_info *boot_info) {
         printf("main: cannot mount root filesystem\n");
     }
 
-    static const char *const argv[] = {"/bin/hello", "one", "two", nullptr};
+    static const char *const argv[] = {"/bin/init", nullptr};
     static const char *const envp[] = {"PATH=/bin", nullptr};
-    struct proc             *p      = proc_spawn("/bin/hello", argv, envp);
-    if (!p) {
-        printf("main: cannot spawn /bin/hello\n");
-    } else {
-        int status = proc_join(p);
-        printf("main: /bin/hello exited with status %d\n", status);
+    if (!proc_spawn("/bin/init", argv, envp)) {
+        printf("main: cannot spawn init\n");
+    }
+
+    while (1) {
+        int   status;
+        pid_t pid = proc_wait(-1, &status, WEXITED, nullptr, nullptr);
+        if (pid < 0) {
+            break;
+        }
+        if (status & 0x7f) {
+            printf("main: pid %d terminated by signal %d\n", pid,
+                   status & 0x7f);
+        } else {
+            printf("main: pid %d exited with status %d\n", pid,
+                   (status >> 8) & 0xff);
+        }
     }
 }
