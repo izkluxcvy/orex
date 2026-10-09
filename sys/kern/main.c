@@ -2,6 +2,7 @@
 
 #include <boot_info.h>
 #include <console.h>
+#include <devfs.h>
 #include <ktime.h>
 #include <machdep.h>
 #include <mm.h>
@@ -34,6 +35,10 @@ void kern_main(struct boot_info *boot_info) {
     }
     if (!root || vfs_mount_root(root) != 0) {
         printf("main: cannot mount root filesystem\n");
+    }
+    int err = vfs_mount("/dev", devfs_create());
+    if (err) {
+        printf("main: cannot mount devfs on /dev: %d\n", err);
     }
 
     static const char *const argv[] = {"/bin/init", nullptr};

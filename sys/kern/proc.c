@@ -3,6 +3,7 @@
 
 #include <errno.h>
 #include <exec.h>
+#include <fd.h>
 #include <kmalloc.h>
 #include <memset.h>
 #include <proc.h>
@@ -46,6 +47,7 @@ static struct proc *proc_alloc(const char *name) {
 
     set_name(p, name);
     waitq_init(&p->child_exit);
+    spin_lock_init(&p->files_lock, "files");
 
     p->vm = vm_create();
     if (!p->vm) {
@@ -55,7 +57,16 @@ static struct proc *proc_alloc(const char *name) {
     return p;
 }
 
+static void drop_cwd(struct proc *p) {
+    if (p->cwd) {
+        vnode_put(p->cwd);
+        p->cwd = nullptr;
+    }
+}
+
 static void proc_free(struct proc *p) {
+    fd_close_all(p);
+    drop_cwd(p);
     vm_destroy(p->vm);
     kfree(p);
 }
@@ -83,6 +94,7 @@ static struct thread *proc_thread(struct proc *p, thread_entry_t entry,
 
 static void proc_start(struct proc *p, struct proc *parent) {
     p->pid = next_pid++;
+    p->cwd = parent->cwd ? vnode_ref(parent->cwd) : nullptr;
     if (p->pid == 1) {
         initproc = p;
     }
@@ -157,11 +169,18 @@ struct proc *proc_spawn(const char *path, const char *const *argv,
         exec_args_free(&a);
     }
 
-    if (err || !proc_thread(p, user_start, e)) {
+    struct file *console = err ? nullptr : vfs_console();
+    if (!console || !proc_thread(p, user_start, e)) {
+        if (console) {
+            file_unref(console);
+        }
         kfree(e);
         proc_free(p);
         return nullptr;
     }
+    p->fds[0] = console;
+    p->fds[1] = file_ref(console);
+    p->fds[2] = file_ref(console);
 
     uint64_t flags = spin_lock_irqsave(&sched_lock);
     proc_start(p, curproc());
@@ -196,6 +215,7 @@ int proc_exec(const char *path, struct vnode *given,
 
     vm_destroy(old);
     set_name(p, path);
+    fd_close_on_exec(p);
     context_exec(e.rip, e.rsp);
     return 0;
 }
@@ -220,6 +240,7 @@ pid_t proc_fork() {
     context_setup_fork(child->threads);
     sched_setscheduler(child->threads, curthread->policy,
                        curthread->base_priority);
+    fd_fork(child, parent);
 
     uint64_t flags = spin_lock_irqsave(&sched_lock);
     proc_start(child, parent);
@@ -241,6 +262,7 @@ void proc_exit(int status) {
 void proc_thread_exit(int status) {
     struct thread *t = curthread;
     struct proc   *p = t->proc;
+    fd_return_borrowed();
 
     uint64_t flags = spin_lock_irqsave(&sched_lock);
     for (struct thread **tp = &p->threads; *tp; tp = &(*tp)->proc_next) {
@@ -257,6 +279,8 @@ void proc_thread_exit(int status) {
 }
 
 [[noreturn]] static void teardown(struct proc *p, int status) {
+    fd_close_all(p);
+    drop_cwd(p);
     vm_clear(p->vm);
 
     spin_lock_irqsave(&sched_lock);

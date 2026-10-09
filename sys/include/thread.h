@@ -9,7 +9,9 @@
 
 #define THREAD_NAME_MAX   16
 #define THREAD_STACK_SIZE (16 * 1024)
+#define THREAD_BORROW_MAX 8
 
+struct file;
 struct mutex;
 struct pmap;
 struct proc;
@@ -49,6 +51,8 @@ struct thread {
 
     struct proc   *proc;
     struct thread *proc_next;
+    struct file   *borrowed[THREAD_BORROW_MAX];
+    int            nborrowed;
     struct pmap   *pmap;
     void          *frame;
     uint64_t       cpu_ns;

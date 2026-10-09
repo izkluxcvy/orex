@@ -1,6 +1,7 @@
 #include <stdint.h>
 
 #include <errno.h>
+#include <fd.h>
 #include <panic.h>
 #include <printf.h>
 #include <proc.h>
@@ -141,6 +142,7 @@ void trap_handler(struct trapframe *tf) {
         tf->rax = (uint64_t)syscall_dispatch(
             (long)tf->rax, (long)tf->rdi, (long)tf->rsi, (long)tf->rdx,
             (long)tf->r10, (long)tf->r8, (long)tf->r9);
+        fd_return_borrowed();
         (void)irq_save();
     } else if (tf->vector == 14 && (tf->cs & 3)) {
         uint64_t addr;

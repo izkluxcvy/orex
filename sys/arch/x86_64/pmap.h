@@ -52,3 +52,5 @@ void pmap_kremove(uintptr_t val);
 
 uintptr_t kvirt_to_phys(const void *va);
 void     *kmap_mmio(uintptr_t pa, size_t len);
+
+int pmap_user_accesible(uintptr_t va, size_t len, int write);

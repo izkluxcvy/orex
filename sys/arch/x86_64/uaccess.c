@@ -2,7 +2,10 @@
 #include <stdint.h>
 
 #include <errno.h>
+#include <proc.h>
+#include <thread.h>
 #include <uaccess.h>
+#include <vm.h>
 
 #include "../mm/pmm.h"
 #include "pmap.h"
@@ -27,6 +30,22 @@ __asm__(".text\n"
 static int user_range(const void *uaddr, size_t n) {
     uintptr_t va = (uintptr_t)uaddr;
     return va >= USER_BASE && va < USER_TOP && n <= USER_TOP - va;
+}
+
+int uaccess_prepare(const void *uaddr, size_t n, int write) {
+    if (!user_range(uaddr, n)) {
+        return -EFAULT;
+    }
+    uintptr_t    va = (uintptr_t)uaddr;
+    struct proc *p  = curthread->proc;
+    for (uintptr_t pg = va & ~(PAGE_SIZE - 1); pg < va + n; pg += PAGE_SIZE) {
+        if (!pmap_user_accesible(pg, 1, write) &&
+            vm_fault(p ? p->vm : nullptr, pg, write ? PROT_WRITE : PROT_READ) !=
+                0) {
+            return -EFAULT;
+        }
+    }
+    return 0;
 }
 
 int copy_from_user(void *dst, const void *usrc, size_t n) {

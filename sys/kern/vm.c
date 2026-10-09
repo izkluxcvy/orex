@@ -2,6 +2,7 @@
 #include <stdint.h>
 
 #include <errno.h>
+#include <fd.h>
 #include <kmalloc.h>
 #include <memcpy.h>
 #include <memset.h>
@@ -363,9 +364,21 @@ static long do_mmap(uintptr_t addr, size_t len, long prot, long flags, long fd,
         return -ENOMEM;
     }
     struct vnode *vn = nullptr;
-    if (!(flags & MAP_ANONYMOUS) || type == MAP_SHARED) {
-        (void)fd;
+    if (type == MAP_SHARED) {
         return -ENODEV;
+    }
+    if (!(flags & MAP_ANONYMOUS)) {
+        struct file *f = fd_get_io(fd);
+        if (!f) {
+            return -EBADF;
+        }
+        if (!f->vnode || !S_ISREG(f->vnode->mode)) {
+            return -ENODEV;
+        }
+        if ((f->flags & O_ACCMODE) == O_WRONLY) {
+            return -EACCES;
+        }
+        vn = f->vnode;
     }
 
     if (flags & MAP_FIXED) {

@@ -3,17 +3,20 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <spinlock.h>
+#include <vfs.h>
 #include <waitq.h>
 
 struct exec_args;
+struct file;
 struct siginfo;
 struct thread;
 struct vmspace;
-struct vnode;
 
 typedef int pid_t;
 
 #define PROC_NAME_MAX 16
+#define PROC_FD_MAX   256
 
 #define WNOHANG    1
 #define WUNTRACED  2
@@ -38,6 +41,10 @@ struct proc {
     struct vmspace *vm;
     struct thread  *threads;
     int             nthreads;
+    struct spinlock files_lock;
+    struct file    *fds[PROC_FD_MAX];
+    uint8_t         fd_flags[PROC_FD_MAX];
+    struct vnode   *cwd;
 
     struct proc *parent;
     struct proc *children;

@@ -161,6 +161,22 @@ void *kmap_mmio(uintptr_t pa, size_t len) {
     return (void *)(va + (pa - first));
 }
 
+int pmap_user_accesible(uintptr_t va, size_t len, int write) {
+    if (va < USER_BASE || va >= USER_TOP || len > USER_TOP - va) {
+        return 0;
+    }
+
+    uintptr_t pml4 = read_cr3() & PMAP_ADDR;
+    uint64_t  need = PMAP_PRESENT | PMAP_USER | (write ? PMAP_WRITE : 0);
+    for (uintptr_t p = va & ~(PAGE_SIZE - 1); p < va + len; p += PAGE_SIZE) {
+        uint64_t *pte = pte_lookup(pml4, p);
+        if (!pte || (*pte & need) != need) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 static void map_2m(uint64_t *pml4, uintptr_t va, uintptr_t pa) {
     uint64_t *pdpt = table_walk(pml4, index_at(va, 39), 0);
     uint64_t *pd   = pdpt ? table_walk(pdpt, index_at(va, 30), 0) : nullptr;
