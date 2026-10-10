@@ -213,3 +213,34 @@ long sys_fcntl(long fd, long cmd, long arg) {
         return -EINVAL;
     }
 }
+
+long sys_pipe2(int *ufds, long flags) {
+    if (flags & ~(long)(O_CLOEXEC | O_CLOFORK | O_NONBLOCK)) {
+        return -EINVAL;
+    }
+    struct file *ends[2];
+    int          err = pipe_create(ends);
+    if (err) {
+        return err;
+    }
+    int fdflags = fd_flags_of(flags);
+    for (int i = 0; i < 2; i++) {
+        ends[i]->flags |= (int)(flags & O_NONBLOCK);
+    }
+
+    int fds[2] = {fd_install(ends[0], 0, fdflags), -1};
+    if (fds[0] >= 0) {
+        fds[1] = fd_install(ends[1], 0, fdflags);
+    }
+    if (fds[1] < 0 || copy_to_user(ufds, fds, sizeof(fds)) != 0) {
+        struct proc *p = curproc();
+        for (int i = 0; i < 2; i++) {
+            if (fds[i] >= 0) {
+                fd_take(p, fds[i]);
+            }
+            file_unref(ends[i]);
+        }
+        return fds[1] < 0 ? -EMFILE : -EFAULT;
+    }
+    return 0;
+}

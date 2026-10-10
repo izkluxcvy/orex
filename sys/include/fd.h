@@ -52,3 +52,4 @@ long sys_close(long fd);
 long sys_dup(long fd);
 long sys_dup3(long fd, long nfd, long flags, int allow_same);
 long sys_fcntl(long fd, long cmd, long arg);
+long sys_pipe2(int *ufds, long flags);

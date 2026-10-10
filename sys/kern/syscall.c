@@ -344,6 +344,10 @@ long syscall_dispatch(long nr, long a0, long a1, long a2, long a3, long a4,
         return sys_getcwd((char *)a0, a1);
     case SYS_lseek:
         return sys_lseek(a0, a1, a2);
+    case SYS_pipe:
+        return sys_pipe2((int *)a0, 0);
+    case SYS_pipe2:
+        return sys_pipe2((int *)a0, a1);
     case SYS_dup:
         return sys_dup(a0);
     case SYS_dup2:

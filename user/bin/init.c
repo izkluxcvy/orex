@@ -1,6 +1,6 @@
 #include "../lib/ulib.h"
 
-static char buf[512];
+static char buf[4096];
 
 static void say(const char *what, long n) {
     puts(what);
@@ -9,59 +9,55 @@ static void say(const char *what, long n) {
 }
 
 int main() {
-    int fd = open("/etc/motd", O_RDONLY);
-    say("init: /etc/motd is descriptor ", fd);
-    long n;
-    while ((n = read(fd, buf, sizeof(buf))) > 0) {
-        write(1, buf, (size_t)n);
-    }
-    say("init: and the offset is now ", lseek(fd, 0, SEEK_CUR));
+    int fds[2];
+    pipe(fds);
+    say("init: the pipe's reading end is ", fds[0]);
+    say("init: the pipe's writing end is ", fds[1]);
 
-    lseek(fd, 0, SEEK_SET);
     if (fork() == 0) {
-        read(fd, buf, 5);
-        _exit(0);
-    }
-    waitpid(-1, nullptr, 0);
-    say("init: the child read 5 bytes, and my offset is ",
-        lseek(fd, 0, SEEK_CUR));
-    close(fd);
-
-    fd = open("/dev", O_RDONLY);
-    n  = getdents64(fd, buf, sizeof(buf));
-    puts("init: in /dev:");
-    for (long at = 0; at < n;) {
-        struct dirent64 *de = (struct dirent64 *)(buf + at);
-        puts(" ");
-        puts(de->d_name);
-        at += de->d_reclen;
-    }
-    puts("\n");
-    close(fd);
-
-    struct stat st;
-    stat("/bin/hello", &st);
-    say("init: /bin/hello has bytes ", st.st_size);
-
-    chdir("/etc");
-    getcwd(buf, sizeof(buf));
-    puts("init: now in ");
-    puts(buf);
-    say(", where motd opens as ", open("motd", O_RDONLY));
-
-    int status;
-    if (fork() == 0) {
-        dup2(open("/dev/null", O_WRONLY), 1);
-        char *argv[] = {"hello", nullptr};
-        execve("/bin/hello", argv, argv + 1);
+        dup2(fds[1], 1);
+        close(fds[0]);
+        close(fds[1]);
+        char *argv[] = {"hello", "through", "a", "pipe", nullptr};
+        execve("/bin/hello", argv, argv + 4);
         _exit(127);
     }
-    waitpid(-1, &status, 0);
-    say("init: hello wrote to /dev/null, and its exit code was ",
-        (status >> 8) & 0xff);
+    close(fds[1]);
 
-    say("init: a write to /dev/full gives ",
-        write(open("/dev/full", O_WRONLY), "x", 1));
-    say("init: and one to a descriptor not open, ", write(1234, "x", 1));
+    long n, total = 0;
+    while ((n = read(fds[0], buf, sizeof(buf))) > 0) {
+        for (long i = 0; i < n; i++) {
+            if (buf[i] >= 'a' && buf[i] <= 'z') {
+                buf[i] -= 'a' - 'A';
+            }
+        }
+        write(1, buf, (size_t)n);
+        total += n;
+    }
+    say("init: read a total of ", total);
+    close(fds[0]);
+    waitpid(-1, nullptr, 0);
+
+    pipe(fds);
+    if (fork() == 0) {
+        close(fds[0]);
+        long sent = 0;
+        for (int i = 0; i < 64; i++) {
+            sent += write(fds[1], buf, sizeof(buf));
+        }
+        say("writer: sent ", sent);
+        _exit(0);
+    }
+    close(fds[1]);
+    total = 0;
+    while ((n = read(fds[0], buf, 1000)) > 0) {
+        total += n;
+    }
+    waitpid(-1, nullptr, 0);
+    say("init: received ", total);
+
+    pipe(fds);
+    close(fds[0]);
+    say("init: a write with no reader gives ", write(fds[1], "x", 1));
     return 0;
 }

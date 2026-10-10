@@ -111,8 +111,8 @@ struct file_ops {
     long (*write)(struct file *f, const void *buf, size_t n);
     long (*size)(struct file *f);
     long (*ioctl)(struct file *f, unsigned long req, void *arg);
-    long (*poll)(struct file *f);
-    long (*close)(struct file *f);
+    int (*poll)(struct file *f);
+    void (*close)(struct file *f);
 };
 
 struct file {
@@ -193,3 +193,5 @@ struct file *vfs_console();
 struct file *file_new(const struct file_ops *ops, int flags, void *data);
 struct file *file_ref(struct file *f);
 void         file_unref(struct file *f);
+
+int pipe_create(struct file *out[2]);

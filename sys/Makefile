@@ -17,7 +17,7 @@ LDFLAGS := -T arch/$(ARCH)/kernel.ld -z norelro --image-base=0x100000 --static
 
 SRCS := kern/main.c kern/cpu.c kern/panic.c kern/spinlock.c kern/thread.c \
 		kern/sched.c kern/waitq.c kern/mutex.c kern/time.c kern/syscall.c \
-		kern/vfs.c kern/vm.c kern/proc.c kern/exec.c kern/fd.c
+		kern/vfs.c kern/vm.c kern/proc.c kern/exec.c kern/fd.c kern/pipe.c
 SRCS += arch/$(ARCH)/entry.c arch/$(ARCH)/init.c arch/$(ARCH)/serial.c \
 		arch/$(ARCH)/mem_.c arch/$(ARCH)/gdt.c arch/$(ARCH)/idt.c \
 		arch/$(ARCH)/trap.c arch/$(ARCH)/pmap.c arch/$(ARCH)/irq.c \
