@@ -180,6 +180,7 @@ void schedule() {
         context_set_kstack((uint64_t)next->stack + next->stack_size);
     }
     pmap_activate(next->pmap ? next->pmap : &kernel_pmap);
+    context_fpu_switch(prev, next);
     time_switch(prev, next);
     context_switch(&prev->rsp, next->rsp);
 

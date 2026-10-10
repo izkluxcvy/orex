@@ -58,6 +58,7 @@ struct thread {
     uint64_t       cpu_ns;
     uint64_t       start_ns;
     int            timed_out;
+    alignas(16) uint8_t fpu[512];
 
     int           detached;
     struct waitq  joiners;

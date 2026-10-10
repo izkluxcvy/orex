@@ -1,6 +1,7 @@
 #include <stdint.h>
 
 #include <cpu.h>
+#include <memcpy.h>
 #include <thread.h>
 
 #include "msr.h"
@@ -51,6 +52,53 @@ void context_set_kstack(uint64_t top) {
     curcpu()->kernel_rsp = top;
 }
 
+#define CR0_MP         (1ULL << 1)
+#define CR0_EM         (1ULL << 2)
+#define CR0_TS         (1ULL << 3)
+#define CR0_NE         (1ULL << 5)
+#define CR4_OSFXSR     (1ULL << 9)
+#define CR4_OSXMMEXCPT (1ULL << 10)
+
+alignas(16) static uint8_t fpu_clean[512];
+
+static void fxsave(void *area) {
+    __asm__ __volatile__("fxsave64 [%0]" : : "r"(area) : "memory");
+}
+
+static void fxrstor(const void *area) {
+    __asm__ __volatile__("fxrstor64 [%0]" : : "r"(area) : "memory");
+}
+
+void fpu_init_cpu() {
+    uint64_t cr0, cr4;
+    __asm__ __volatile__("mov %0, cr0" : "=r"(cr0));
+    __asm__ __volatile__("mov %0, cr4" : "=r"(cr4));
+    cr0 = (cr0 & ~(CR0_EM | CR0_TS)) | CR0_MP | CR0_NE;
+    cr4 |= CR4_OSFXSR | CR4_OSXMMEXCPT;
+    __asm__ __volatile__("mov cr0, %0" : : "r"(cr0));
+    __asm__ __volatile__("mov cr4, %0" : : "r"(cr4));
+}
+
+void fpu_init() {
+    fpu_init_cpu();
+    uint32_t mxcsr = 0x1f80;
+    __asm__ __volatile__("fninit\n\tldmxcsr %0" : : "m"(mxcsr));
+    fxsave(fpu_clean);
+}
+
+void context_fpu_init(struct thread *t) {
+    memcpy(t->fpu, fpu_clean, sizeof(t->fpu));
+}
+
+void context_fpu_switch(struct thread *prev, struct thread *next) {
+    if (prev->proc) {
+        fxsave(prev->fpu);
+    }
+    if (next->proc) {
+        fxrstor(next->fpu);
+    }
+}
+
 void usermode_enter(uint64_t rip, uint64_t rsp) {
     __asm__ __volatile__("cli\n\t"
                          "push %2\n\t"
@@ -81,9 +129,11 @@ void context_setup_fork(struct thread *child) {
     *tf        = *(struct trapframe *)curthread->frame;
     tf->rax    = 0;
     child->rsp = context_setup(tf, fork_trampoline);
+    fxsave(child->fpu);
 }
 
 void context_exec(uint64_t rip, uint64_t rsp) {
+    fxrstor(fpu_clean);
     *(struct trapframe *)curthread->frame = (struct trapframe){
         .rip    = rip,
         .cs     = USER_CS,

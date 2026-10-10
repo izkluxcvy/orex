@@ -31,6 +31,7 @@ void machdep_init() {
     gdt_init();
     idt_init();
     syscall_init();
+    fpu_init();
     printf("machdep: initialized\n");
 }
 

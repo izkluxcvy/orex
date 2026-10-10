@@ -23,6 +23,8 @@ BINS := $(ULIB_BINS)
 STATIC := $(shell find root -type f)
 OBJS := $(LIB_OBJS) $(PROGS:%=bin/%.o)
 
+bin/init.o: CFLAGS := $(BASE_CFLAGS) -ffreestanding -fno-stack-protector
+
 .PHONY: all
 
 all: $(TARGET)

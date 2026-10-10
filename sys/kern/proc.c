@@ -78,6 +78,7 @@ static struct thread *new_thread(struct proc *p, thread_entry_t entry,
         t->proc     = p;
         t->pmap     = p->vm->pmap;
         t->detached = 1;
+        context_fpu_init(t);
     }
     return t;
 }
