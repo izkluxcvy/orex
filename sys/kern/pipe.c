@@ -7,6 +7,7 @@
 #include <memset.h>
 #include <mutex.h>
 #include <sched.h>
+#include <signal.h>
 #include <spinlock.h>
 #include <uaccess.h>
 #include <vfs.h>
@@ -36,7 +37,7 @@ static long wait_data(struct file *f, struct pipe *p, uint64_t *flags) {
     for (int intr = 0; p->len == 0 && p->writers > 0;) {
         if (intr || (f->flags & O_NONBLOCK)) {
             spin_unlock_irqrestore(&sched_lock, *flags);
-            return intr ? -EINTR : -EAGAIN;
+            return intr ? -ERESTARTSYS : -EAGAIN;
         }
         intr = waitq_sleep_intr(&p->can_read) != 0;
     }
@@ -97,7 +98,7 @@ static long wait_room(struct file *f, struct pipe *p, size_t want,
     for (int intr = 0; p->readers > 0 && PIPE_SIZE - p->len < want;) {
         if (intr || (f->flags & O_NONBLOCK)) {
             spin_unlock_irqrestore(&sched_lock, *flags);
-            return intr ? -EINTR : -EAGAIN;
+            return intr ? -ERESTARTSYS : -EAGAIN;
         }
         intr = waitq_sleep_intr(&p->can_write) != 0;
     }

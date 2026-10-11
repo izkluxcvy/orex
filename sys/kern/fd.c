@@ -4,6 +4,7 @@
 #include <errno.h>
 #include <fd.h>
 #include <proc.h>
+#include <signal.h>
 #include <thread.h>
 #include <uaccess.h>
 
@@ -123,6 +124,9 @@ long sys_write(long fd, const void *buf, long n) {
         return -EFAULT;
     }
     long ret = f->ops->write(f, buf, (size_t)n);
+    if (ret == -EPIPE) {
+        signal_send(curproc(), SIGPIPE);
+    }
     return ret;
 }
 

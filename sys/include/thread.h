@@ -5,6 +5,7 @@
 
 #include <cpu.h>
 #include <sched.h>
+#include <signal.h>
 #include <waitq.h>
 
 #define THREAD_NAME_MAX   16
@@ -49,15 +50,19 @@ struct thread {
     struct mutex *blocked_on;
     struct mutex *held;
 
-    struct proc   *proc;
-    struct thread *proc_next;
-    struct file   *borrowed[THREAD_BORROW_MAX];
-    int            nborrowed;
-    struct pmap   *pmap;
-    void          *frame;
-    uint64_t       cpu_ns;
-    uint64_t       start_ns;
-    int            timed_out;
+    struct proc      *proc;
+    struct thread    *proc_next;
+    tid_t             utid;
+    struct thread_sig sig;
+    struct waitq      sig_wait;
+    struct file      *borrowed[THREAD_BORROW_MAX];
+    int               nborrowed;
+    struct pmap      *pmap;
+    void             *frame;
+    long              syscall_nr;
+    uint64_t          cpu_ns;
+    uint64_t          start_ns;
+    int               timed_out;
     alignas(16) uint8_t fpu[512];
 
     int           detached;

@@ -9,6 +9,7 @@
 #include <memset.h>
 #include <printf.h>
 #include <proc.h>
+#include <signal.h>
 #include <syscall.h>
 #include <thread.h>
 #include <uaccess.h>
@@ -302,6 +303,52 @@ static long sys_wait4(long pid, int *ustatus, long options, void *urusage) {
     return ret;
 }
 
+#define P_ALL  0
+#define P_PID  1
+#define P_PGID 2
+
+static long sys_waitid(long idtype, long id, struct siginfo *uinfo,
+                       long options, void *urusage) {
+    long allowed = WNOHANG | WUNTRACED | WEXITED | WCONTINUED | WNOWAIT;
+    if ((options & ~allowed) ||
+        ~(options & (WEXITED | WUNTRACED | WCONTINUED))) {
+        return -EINVAL;
+    }
+    pid_t pid;
+    switch (idtype) {
+    case P_ALL:
+        pid = -1;
+        break;
+    case P_PID:
+        if (id <= 0) {
+            return -EINVAL;
+        }
+        pid = (pid_t)id;
+        break;
+    case P_PGID:
+        if (id < 0) {
+            return -EINVAL;
+        }
+        pid = id ? (pid_t)-id : 0;
+        break;
+    default:
+        return -EINVAL;
+    }
+    struct siginfo info            = {0};
+    char           ru[RUSAGE_SIZE] = {0};
+    pid_t          ret = proc_wait(pid, nullptr, (int)options, &info, ru);
+    if (ret < 0) {
+        return ret;
+    }
+    if (uinfo && copy_to_user(uinfo, &info, sizeof(info)) != 0) {
+        return -EFAULT;
+    }
+    if (urusage && copy_to_user(urusage, ru, sizeof(ru)) != 0) {
+        return -EFAULT;
+    }
+    return 0;
+}
+
 long syscall_dispatch(long nr, long a0, long a1, long a2, long a3, long a4,
                       long a5) {
     switch (nr) {
@@ -344,6 +391,40 @@ long syscall_dispatch(long nr, long a0, long a1, long a2, long a3, long a4,
         return sys_getcwd((char *)a0, a1);
     case SYS_lseek:
         return sys_lseek(a0, a1, a2);
+    case SYS_rt_sigaction:
+        return sys_rt_sigaction(a0, (const struct k_sigaction *)a1,
+                                (struct k_sigaction *)a2, a3);
+    case SYS_rt_sigprocmask:
+        return sys_rt_sigprocmask(a0, (const uint64_t *)a1, (uint64_t *)a2, a3);
+    case SYS_rt_sigreturn:
+        return sys_rt_sigreturn();
+    case SYS_rt_sigpending:
+        return sys_rt_sigpending((uint64_t *)a0, a1);
+    case SYS_rt_sigsuspend:
+        return sys_rt_sigsuspend((const uint64_t *)a0, a1);
+    case SYS_rt_sigqueueinfo:
+        return sys_rt_sigqueueinfo(a0, a1, (const struct siginfo *)a2);
+    case SYS_sigaltstack:
+        return sys_sigaltstack((const struct k_stack *)a0,
+                               (struct k_stack *)a1);
+    case SYS_pause:
+        return sys_pause();
+    case SYS_tkill:
+        return sys_tgkill(-1, a1, a2);
+    case SYS_tgkill:
+        return sys_tgkill(a0, a1, a2);
+    case SYS_kill:
+        return sys_kill(a0, a1);
+    case SYS_setpgid:
+        return proc_setpgid((pid_t)a0, (pid_t)a1);
+    case SYS_setsid:
+        return proc_setsid();
+    case SYS_getsid:
+        return proc_getsid((pid_t)a0);
+    case SYS_getpgid:
+        return proc_getpgid((pid_t)a0);
+    case SYS_gettid:
+        return curthread->utid;
     case SYS_pipe:
         return sys_pipe2((int *)a0, 0);
     case SYS_pipe2:
@@ -371,6 +452,8 @@ long syscall_dispatch(long nr, long a0, long a1, long a2, long a3, long a4,
                          (const char *const *)a3, a4);
     case SYS_wait4:
         return sys_wait4(a0, (int *)a1, a2, (void *)a3);
+    case SYS_waitid:
+        return sys_waitid(a0, a1, (struct siginfo *)a2, a3, (void *)a4);
     case SYS_exit:
         proc_thread_exit(W_EXITCODE((int)a0));
     case SYS_exit_group:

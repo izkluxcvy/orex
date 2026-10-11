@@ -5,6 +5,7 @@
 #include <panic.h>
 #include <printf.h>
 #include <proc.h>
+#include <signal.h>
 #include <syscall.h>
 #include <thread.h>
 #include <uaccess.h>
@@ -84,10 +85,24 @@ static void dump_frame(struct trapframe *tf) {
     }
 }
 
-[[noreturn]] static void user_fault(struct trapframe *tf) {
-    printf("trap: thread %d (%s): %s at 0x%lx\n", curthread->tid,
-           curthread->name, exception_names[tf->vector], tf->rip);
-    proc_exit(W_SIGNALED(tf->vector == 14 ? 11 : 4));
+static void fault_signal(struct trapframe *tf) {
+    switch (tf->vector) {
+    case 0: // #DE
+        signal_force(SIGFPE, FPE_INTDIV, tf->rip);
+        break;
+    case 16: // #MF
+    case 19: // #XM
+        signal_force(SIGFPE, FPE_FLTINV, tf->rip);
+        break;
+    case 3:
+        signal_force(SIGTRAP, TRAP_BRKPT, tf->rip);
+        break;
+    case 6:
+        signal_force(SIGKILL, ILL_ILLOPN, tf->rip);
+        break;
+    default:
+        signal_force(SIGSEGV, SI_KERNEL, 0);
+    }
 }
 
 #define PF_WRITE 0x02
@@ -137,7 +152,8 @@ static int kernel_user_fault(struct trapframe *tf) {
 
 void trap_handler(struct trapframe *tf) {
     if (tf->vector == TRAP_SYSCALL) {
-        curthread->frame = tf;
+        curthread->frame      = tf;
+        curthread->syscall_nr = (long)tf->rax;
         irq_enable();
         tf->rax = (uint64_t)syscall_dispatch(
             (long)tf->rax, (long)tf->rdi, (long)tf->rsi, (long)tf->rdx,
@@ -147,9 +163,11 @@ void trap_handler(struct trapframe *tf) {
     } else if (tf->vector == 14 && (tf->cs & 3)) {
         uint64_t addr;
         int      err = user_page_fault(tf, &addr);
-        if (err) {
-            printf("trap: no page for 0x%lx\n", addr);
-            user_fault(tf);
+        if (err == -EFAULT || err == -EACCES) {
+            signal_force(SIGSEGV, err == -EFAULT ? SEGV_MAPERR : SEGV_ACCERR,
+                         addr);
+        } else if (err) {
+            signal_force(SIGBUS, BUS_ADRERR, addr);
         }
     } else if (tf->vector == 14 && kernel_user_fault(tf)) {
         return;
@@ -161,10 +179,14 @@ void trap_handler(struct trapframe *tf) {
             dump_frame(tf);
             panic("trap: unhandled CPU exception");
         } else {
-            user_fault(tf);
+            fault_signal(tf);
         }
     } else {
         irq_dispatch(tf);
+    }
+
+    if (tf->cs & 3) {
+        signal_deliver(tf);
     }
 }
 

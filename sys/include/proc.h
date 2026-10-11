@@ -3,13 +3,14 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <signal.h>
 #include <spinlock.h>
 #include <vfs.h>
 #include <waitq.h>
 
 struct exec_args;
 struct file;
-struct siginfo;
+struct sigq;
 struct thread;
 struct vmspace;
 
@@ -34,6 +35,9 @@ enum proc_state {
 
 struct proc {
     pid_t           pid;
+    pid_t           pgid;
+    pid_t           sid;
+    int             execed;
     char            name[PROC_NAME_MAX];
     enum proc_state state;
     int             status;
@@ -51,6 +55,15 @@ struct proc {
     struct proc *sibling;
     struct waitq child_exit;
     struct proc *all_next;
+
+    uint64_t           sig_pending;
+    struct k_sigaction sig_actions[NSIG];
+    struct siginfo     sig_info[SIGRTMIN];
+    struct sigq       *sig_queue;
+    int                sig_queued;
+    int                stopped, stop_sig;
+    int                stop_report, cont_report;
+    struct waitq       stop_wait;
 };
 
 extern struct proc proc0;
@@ -65,5 +78,13 @@ int proc_exec(const char *path, struct vnode *given, const struct exec_args *a);
 pid_t             proc_fork();
 [[noreturn]] void proc_exit(int status);
 [[noreturn]] void proc_thread_exit(int status);
+struct thread    *proc_find_thread_locked(pid_t tid);
 pid_t proc_wait(pid_t pid, int *status, int options, struct siginfo *info,
                 void *rusage);
+
+struct proc *proc_find_locked(pid_t pid);
+int          proc_setpgid(pid_t pid, pid_t pgid);
+pid_t        proc_setsid();
+pid_t        proc_getsid(pid_t pid);
+int          pgrp_orphaned_locked(pid_t pgid);
+pid_t        proc_getpgid(pid_t pid);

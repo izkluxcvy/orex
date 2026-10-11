@@ -48,6 +48,7 @@ int vm_map(struct vmspace *vm, uintptr_t start, uintptr_t end, int prot,
 int vm_unmap(struct vmspace *vm, uintptr_t start, uintptr_t end);
 
 int vm_fault(struct vmspace *vm, uintptr_t va, int access);
+int vm_prefault(struct vmspace *vm, uintptr_t va, size_t len, int access);
 
 int vm_write(struct vmspace *vm, uintptr_t va, const void *src, size_t len);
 

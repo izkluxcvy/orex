@@ -329,6 +329,20 @@ int vm_fault(struct vmspace *vm, uintptr_t va, int access) {
     return fault_once(vm, va, access);
 }
 
+int vm_prefault(struct vmspace *vm, uintptr_t va, size_t len, int access) {
+    uintptr_t end = va + len;
+    if (end < va) {
+        return -EFAULT;
+    }
+    for (uintptr_t p = va & ~(PAGE_SIZE - 1); p < end; p += PAGE_SIZE) {
+        int err = vm_fault(vm, p, access);
+        if (err) {
+            return err;
+        }
+    }
+    return 0;
+}
+
 int vm_write(struct vmspace *vm, uintptr_t va, const void *src, size_t len) {
     const uint8_t *s = src;
     while (len) {

@@ -1,6 +1,8 @@
 #include <stdint.h>
 
+#include <errno.h>
 #include <sched.h>
+#include <signal.h>
 #include <spinlock.h>
 #include <thread.h>
 #include <waitq.h>
@@ -42,10 +44,13 @@ void waitq_sleep(struct waitq *wq) {
 }
 
 int waitq_sleep_intr(struct waitq *wq) {
+    if (signal_pending()) {
+        return -EINTR;
+    }
     curthread->sleep_wq = wq;
     waitq_sleep(wq);
     curthread->sleep_wq = nullptr;
-    return 0;
+    return signal_pending() ? -EINTR : 0;
 }
 
 static struct thread *waitq_take_highest(struct waitq *wq) {
