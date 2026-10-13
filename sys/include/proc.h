@@ -3,6 +3,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <ktime.h>
 #include <signal.h>
 #include <spinlock.h>
 #include <vfs.h>
@@ -10,6 +11,7 @@
 
 struct exec_args;
 struct file;
+struct ktimer;
 struct sigq;
 struct thread;
 struct vmspace;
@@ -39,6 +41,7 @@ struct proc {
     pid_t           sid;
     int             execed;
     char            name[PROC_NAME_MAX];
+    int64_t         start_time;
     enum proc_state state;
     int             status;
 
@@ -64,6 +67,13 @@ struct proc {
     int                stopped, stop_sig;
     int                stop_report, cont_report;
     struct waitq       stop_wait;
+
+    uint64_t       utime, stime;
+    uint64_t       cutime, cstime;
+    uint64_t       cpu_ns;
+    struct ktimer *itimer_real;
+    uint64_t       itimer_left[3], itimer_interval[3];
+    struct ktimer *timers[TIMER_MAX];
 };
 
 extern struct proc proc0;

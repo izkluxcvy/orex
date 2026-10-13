@@ -47,6 +47,7 @@ static struct proc *proc_alloc(const char *name) {
     memset(p, 0, sizeof(*p));
 
     set_name(p, name);
+    p->start_time = time_real() / NSEC;
     waitq_init(&p->child_exit);
     waitq_init(&p->stop_wait);
     spin_lock_init(&p->files_lock, "files");
@@ -224,6 +225,7 @@ int proc_exec(const char *path, struct vnode *given,
     vm_destroy(old);
     set_name(p, path);
     signal_exec(p);
+    time_exec(p);
     p->execed = 1;
     fd_close_on_exec(p);
     context_exec(e.rip, e.rsp);
@@ -251,6 +253,7 @@ pid_t proc_fork() {
     sched_setscheduler(child->threads, curthread->policy,
                        curthread->base_priority);
     signal_fork(child, parent);
+    time_fork(child);
     fd_fork(child, parent);
 
     uint64_t flags = spin_lock_irqsave(&sched_lock);
@@ -307,6 +310,7 @@ void proc_thread_exit(int status) {
             break;
         }
     }
+    p->cpu_ns += time_thread_cpu(t);
     if (--p->nthreads > 0) {
         thread_exit_locked(nullptr);
     }
@@ -319,6 +323,7 @@ void proc_thread_exit(int status) {
     drop_cwd(p);
     vm_clear(p->vm);
     signal_exit(p);
+    time_exit(p);
 
     spin_lock_irqsave(&sched_lock);
 
@@ -389,7 +394,6 @@ pid_t proc_wait(pid_t pid, int *status, int options, struct siginfo *info,
     struct proc *self  = curproc();
     uint64_t     flags = spin_lock_irqsave(&sched_lock);
     int          intr  = 0;
-    (void)rusage;
 
     while (1) {
         int found = 0;
@@ -433,12 +437,16 @@ pid_t proc_wait(pid_t pid, int *status, int options, struct siginfo *info,
             if (info) {
                 child_info(c, info);
             }
+            if (rusage) {
+                time_rusage(c, 2, rusage);
+            }
             if (options & WNOWAIT) {
                 spin_unlock_irqrestore(&sched_lock, flags);
                 return cpid;
             }
 
             *pp = c->sibling;
+            time_reap(self, c);
             for (struct proc **lp = &proc_list; *lp; lp = &(*lp)->all_next) {
                 if (*lp == c) {
                     *lp = c->all_next;

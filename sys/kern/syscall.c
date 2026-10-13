@@ -5,6 +5,7 @@
 #include <exec.h>
 #include <fd.h>
 #include <kmalloc.h>
+#include <ktime.h>
 #include <memcpy.h>
 #include <memset.h>
 #include <printf.h>
@@ -402,6 +403,9 @@ long syscall_dispatch(long nr, long a0, long a1, long a2, long a3, long a4,
         return sys_rt_sigpending((uint64_t *)a0, a1);
     case SYS_rt_sigsuspend:
         return sys_rt_sigsuspend((const uint64_t *)a0, a1);
+    case SYS_rt_sigtimedwait:
+        return sys_rt_sigtimedwait((const uint64_t *)a0, (struct siginfo *)a1,
+                                   (const void *)a2, a3);
     case SYS_rt_sigqueueinfo:
         return sys_rt_sigqueueinfo(a0, a1, (const struct siginfo *)a2);
     case SYS_sigaltstack:
@@ -413,6 +417,36 @@ long syscall_dispatch(long nr, long a0, long a1, long a2, long a3, long a4,
         return sys_tgkill(-1, a1, a2);
     case SYS_tgkill:
         return sys_tgkill(a0, a1, a2);
+    case SYS_clock_gettime:
+        return sys_clock_gettime(a0, (struct k_timespec *)a1);
+    case SYS_clock_settime:
+        return sys_clock_settime(a0, (const struct k_timespec *)a1);
+    case SYS_clock_getres:
+        return sys_clock_getres(a0, (struct k_timespec *)a1);
+    case SYS_nanosleep:
+        return sys_nanosleep((const struct k_timespec *)a0,
+                             (struct k_timespec *)a1);
+    case SYS_clock_nanosleep:
+        return sys_clock_nanosleep(a0, a1, (const struct k_timespec *)a2,
+                                   (struct k_timespec *)a3);
+    case SYS_getitimer:
+        return sys_getitimer(a0, (void *)a1);
+    case SYS_setitimer:
+        return sys_setitimer(a0, (const void *)a1, (void *)a2);
+    case SYS_timer_create:
+        return sys_timer_create(a0, (const void *)a1, (int *)a2);
+    case SYS_timer_settime:
+        return sys_timer_settime(a0, a1, (const void *)a2, (void *)a3);
+    case SYS_timer_gettime:
+        return sys_timer_gettime(a0, (void *)a1);
+    case SYS_timer_getoverrun:
+        return sys_timer_getoverrun(a0);
+    case SYS_timer_delete:
+        return sys_timer_delete(a0);
+    case SYS_times:
+        return sys_times((void *)a0);
+    case SYS_getrusage:
+        return sys_getrusage(a0, (void *)a1);
     case SYS_kill:
         return sys_kill(a0, a1);
     case SYS_setpgid:

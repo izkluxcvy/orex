@@ -6,93 +6,72 @@ static void say(const char *what, long n) {
     puts("\n");
 }
 
-static volatile int got;
+#define SYS_pause         34
+#define SYS_nanosleep     35
+#define SYS_setitimer     38
+#define SYS_times         100
+#define SYS_clock_gettime 228
+#define SIGALRM           14
 
-static void on_usr1(int sig) { got = sig; }
+struct timespec {
+    long sec, nsec;
+};
 
-static void on_segv(int sig) {
-    puts("child: caught signal ");
-    putnum(sig);
-    puts(", and leaves by itself\n");
-    _exit(3);
+static long now_ms() {
+    struct timespec ts;
+    syscall4(SYS_clock_gettime, 1, (long)&ts, 0, 0);
+    return ts.sec * 1000 + ts.nsec / 1000000;
 }
 
-static void report(const char *who, int pid) {
-    int status;
-    waitpid(pid, &status, 0);
-    puts(who);
-    say(WIFEXITED(status) ? ": exit " : ": signal ",
-        WIFEXITED(status) ? WEXITSTATUS(status) : WTERMSIG(status));
+static long sleep_ms(long ms, struct timespec *left) {
+    struct timespec ts = {ms / 1000, ms % 1000 * 1000000};
+    return syscall4(SYS_nanosleep, (long)&ts, (long)left, 0, 0);
+}
+
+static void alarm_us(long first, long interval) {
+    long it[4] = {0, interval, 0, first};
+    syscall4(SYS_setitimer, 0, (long)it, 0, 0);
+}
+
+static volatile int alarms;
+
+static void on_alarm(int sig) {
+    (void)sig;
+    alarms++;
 }
 
 int main() {
-    signal(SIGUSR1, on_usr1);
-    int pid = fork();
-    if (pid == 0) {
-        kill(getppid(), SIGUSR1);
-        _exit(0);
-    }
-    while (!got) {
-    }
-    say("init: the handler ran, for signal ", got);
-    report("the sender", pid);
+    struct timespec ts;
+    syscall4(SYS_clock_gettime, 0, (long)&ts, 0, 0);
+    say("init: seconds since 1970: ", ts.sec);
 
-    pid = fork();
-    if (pid == 0) {
-        while (1) {
-        }
-    }
-    kill(pid, SIGTERM);
-    report("a loop sent SIGTERM", pid);
+    long t0 = now_ms();
+    sleep_ms(250, nullptr);
+    say("init: asked to sleep 250 ms, and slept ", now_ms() - t0);
 
-    pid = fork();
-    if (pid == 0) {
-        signal(SIGTERM, SIG_IGN);
-        kill(getpid(), SIGTERM);
-        _exit(0);
+    signal(SIGALRM, on_alarm);
+    t0 = now_ms();
+    alarm_us(100000, 100000);
+    while (alarms < 5) {
+        syscall4(SYS_pause, 0, 0, 0, 0);
     }
-    report("one that ignroes SIGTERM", pid);
+    alarm_us(0, 0);
+    say("init: five alarms 100 ms apart took ", now_ms() - t0);
 
-    pid = fork();
-    if (pid == 0) {
-        *(volatile int *)8 = 1;
-    }
-    report("a bad pointer", pid);
-    pid = fork();
-    if (pid == 0) {
-        signal(SIGSEGV, on_segv);
-        *(volatile int *)8 = 1;
-    }
-    report("the same, with a handler", pid);
+    alarm_us(300000, 0);
+    long r = sleep_ms(1000, &ts);
+    say("init: a one-second sleep, an alarm at 300 ms: it returned ", r);
+    say("init: with milliseconds left: ", ts.sec * 1000 + ts.nsec / 1000000);
 
-    unsigned long set = SIGBIT(SIGUSR1), old;
-    got               = 0;
-    sigprocmask(SIG_BLOCK, &set, &old);
-    kill(getpid(), SIGUSR1);
-    say("init: SIGUSR1 sent while blocked; the handler saw ", got);
-    sigprocmask(SIG_SETMASK, &old, nullptr);
-    say("init: and once unblocked, ", got);
-
-    int status;
-    pid = fork();
-    if (pid == 0) {
-        while (1) {
-        }
+    long tms[4];
+    t0 = now_ms();
+    sleep_ms(200, nullptr);
+    while (now_ms() - t0 < 500) {
     }
-    kill(pid, 19);
-    waitpid(pid, &status, 2);
-    say("init: the stopped child's status (0x137f is 4991): ", status);
-    kill(pid, SIGKILL);
-    report("stopped, then sent SIGKILL", pid);
-
-    int fds[2];
-    pipe(fds);
-    close(fds[0]);
-    pid = fork();
-    if (pid == 0) {
-        write(fds[1], "x", 1);
-        _exit(0);
-    }
-    report("a writer to a pipe with no reader", pid);
+    syscall4(SYS_times, (long)tms, 0, 0, 0);
+    say("init: 200 ms asleep and 300 busy; hundredths of a second in user "
+        "mode: ",
+        tms[0]);
+    say("init: and in the kernel: ", tms[1]);
     return 0;
 }

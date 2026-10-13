@@ -257,6 +257,9 @@ static void dequeue(struct proc *p, struct sigset_ref s, int sig,
     if (sig < SIGRTMIN) {
         *out = s.info[sig];
         *s.pending &= ~SIGBIT(sig);
+        if (out->si_code == SI_TIMER) {
+            time_timer_taken(p, out);
+        }
         return;
     }
 
@@ -270,6 +273,9 @@ static void dequeue(struct proc *p, struct sigset_ref s, int sig,
         *pp  = q->next;
         kfree(q);
         p->sig_queued--;
+        if (out->si_code == SI_TIMER) {
+            time_timer_taken(p, out);
+        }
     } else {
         *out = kernel_info(sig);
     }
@@ -681,6 +687,58 @@ long sys_pause() {
     }
     spin_unlock_irqrestore(&sched_lock, flags);
     return -ERESTARTNOHAND;
+}
+
+long sys_rt_sigtimedwait(const uint64_t *uset, struct siginfo *uinfo,
+                         const void *utimeout, long setsize) {
+    uint64_t          set;
+    struct k_timespec ts = {0};
+    if (setsize != sizeof(uint64_t)) {
+        return -EINVAL;
+    }
+    if (copy_from_user(&set, uset, sizeof(set)) != 0 ||
+        (utimeout && copy_from_user(&ts, utimeout, sizeof(ts)) != 0)) {
+        return -EFAULT;
+    }
+    if (utimeout && (ts.sec < 0 || ts.nsec < 0 || ts.nsec >= NSEC)) {
+        return -EINVAL;
+    }
+    uint64_t deadline = 0;
+    if (utimeout) {
+        deadline = time_mono() + (uint64_t)(ts.sec * NSEC + ts.nsec);
+    }
+    set &= ~UNBLOCKABLE;
+
+    struct thread *t = curthread;
+    struct siginfo info;
+    uint64_t       flags = spin_lock_irqsave(&sched_lock);
+    long           ret;
+    while (1) {
+        uint64_t hit = pending_for(t) & set;
+        if (hit) {
+            int sig = __builtin_ctzll(hit) + 1;
+            take(t, sig, &info);
+            ret = sig;
+            break;
+        }
+        if (signal_pending()) {
+            ret = -EINTR;
+            break;
+        }
+        t->sig.waitset = set;
+        int r          = utimeout ? sleep_until(&t->sig_wait, deadline)
+                                  : waitq_sleep_intr(&t->sig_wait);
+        t->sig.waitset = 0;
+        if (r == -ETIMEDOUT) {
+            ret = -EAGAIN;
+            break;
+        }
+    }
+    spin_unlock_irqrestore(&sched_lock, flags);
+    if (ret > 0 && uinfo && copy_to_user(uinfo, &info, sizeof(info)) != 0) {
+        return -EFAULT;
+    }
+    return ret;
 }
 
 long sys_sigaltstack(const struct k_stack *uss, struct k_stack *uold) {
