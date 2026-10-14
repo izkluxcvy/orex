@@ -6,6 +6,7 @@
 
 #define IRQ_VECTOR_BASE     0x20
 #define IRQ_VECTOR_TIMER    0x20
+#define IRQ_VECTOR_ISA      0x30
 #define IRQ_VECTOR_SPURIOUS 0xFF
 
 static inline uint64_t irq_save() {

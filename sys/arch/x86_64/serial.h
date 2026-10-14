@@ -4,3 +4,4 @@
 
 void serial_init();
 void serial_putc(char c);
+void serial_init_late();

@@ -3,9 +3,12 @@
 #include <printf.h>
 
 #include "io.h"
+#include "ioapic.h"
+#include "irq.h"
 #include "serial.h"
 
 #define COM1_PORT 0x3f8
+#define COM1_IRQ  4
 
 static int transmit_ready() { return inb(COM1_PORT + 5) & 0x20; }
 
@@ -25,4 +28,17 @@ void serial_init() {
     outb(COM1_PORT + 4, 0x0b); // IRQs enabled, RTS/DSR set
 
     printf_add_sink(serial_putc);
+}
+
+static void serial_irq(struct trapframe *tf) {
+    (void)tf;
+    while (inb(COM1_PORT + 5) & 0x01) {
+        printf("serial: %x\n", (unsigned)inb(COM1_PORT));
+    }
+}
+
+void serial_init_late() {
+    irq_register(IRQ_VECTOR_ISA + COM1_IRQ, serial_irq);
+    ioapic_route_isa(COM1_IRQ, IRQ_VECTOR_ISA + COM1_IRQ);
+    outb(COM1_PORT + 1, 0x01);
 }

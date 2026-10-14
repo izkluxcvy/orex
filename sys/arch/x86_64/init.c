@@ -6,11 +6,14 @@
 
 #include "apic.h"
 #include "cpufunc.h"
+#include "ioapic.h"
 #include "irq.h"
 #include "segment.h"
 #include "serial.h"
 #include "trap.h"
 #include "user.h"
+
+void ps2kbd_init();
 
 static volatile uint64_t ticks;
 
@@ -40,6 +43,9 @@ void machdep_init_late() {
     apic_init();
     irq_register(IRQ_VECTOR_TIMER, timer_handler);
     apic_timer_init(TICK_HZ);
+    ioapic_init();
+    ps2kbd_init();
+    serial_init_late();
 
     __asm__ __volatile__("sti");
     printf("machdep: interrupts enabled\n");
