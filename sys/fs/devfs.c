@@ -8,49 +8,72 @@
 #include <memcmp.h>
 #include <memcpy.h>
 #include <memset.h>
-#include <printf.h>
+#include <proc.h>
+#include <tty.h>
 #include <uaccess.h>
 #include <vfs.h>
 
 #define ROOT_INO 1
 
 #define DEV(major, minor) (((uint64_t)(major) << 8) | (minor))
+#define SERIAL_INO        4
+#define FB_INO            5
 
-static long console_read(struct file *f, void *buf, size_t n) {
-    (void)f, (void)buf, (void)n;
+static long tty_file_read(struct file *f, void *buf, size_t n) {
+    return tty_read(f->data, buf, n, f->flags & O_NONBLOCK);
+}
+
+static long tty_file_write(struct file *f, const void *buf, size_t n) {
+    return tty_write(f->data, buf, n, f->flags & O_NONBLOCK);
+}
+
+static long tty_file_ioctl(struct file *f, unsigned long req, void *arg) {
+    return tty_ioctl(f->data, f, req, arg);
+}
+
+static const struct file_ops tty_ops = {
+    .read  = tty_file_read,
+    .write = tty_file_write,
+    .ioctl = tty_file_ioctl,
+};
+
+static int open_tty(struct tty *t, int flags, struct file **out) {
+    if (!(*out = file_new(&tty_ops, flags, t))) {
+        return -ENOMEM;
+    }
+    tty_opened(t, flags);
     return 0;
 }
 
-static long console_write(struct file *f, const void *buf, size_t n) {
-    (void)f;
-    char   chunk[128];
-    size_t done = 0;
-    while (done < n) {
-        size_t k = n - done < sizeof(chunk) ? n - done : sizeof(chunk);
-        if (copy_from_user(chunk, (const char *)buf + done, k) != 0) {
-            return done ? (long)done : -EFAULT;
-        }
-        printf_write(chunk, k);
-        done += k;
-    }
-    return (long)done;
-}
-
-static const struct file_ops tty_ops = {.read  = console_read,
-                                        .write = console_write};
-
-static int console_open(int flags, struct file **out) {
-    return (*out = file_new(&tty_ops, flags, nullptr)) ? 0 : -ENOMEM;
-}
-
 struct file *vfs_console() {
-    struct file  *f    = file_new(&tty_ops, O_RDWR, nullptr);
+    struct file  *f    = file_new(&tty_ops, O_RDWR, tty_console());
     struct vnode *root = vfs_root();
     if (f && vfs_lookup(root, "/dev/console", VFS_FOLLOW, &f->vnode) != 0) {
         f->vnode = nullptr;
     }
     vnode_put(root);
     return f;
+}
+
+static int console_open(int flags, struct file **out) {
+    return open_tty(tty_console(), flags, out);
+}
+
+static int fb_open(int flags, struct file **out) {
+    return open_tty(tty_fb(), flags, out);
+}
+
+static int serial_open(int flags, struct file **out) {
+    struct tty *t = tty_serial();
+    return t ? open_tty(t, flags, out) : -ENXIO;
+}
+
+static int ctty_open(int flags, struct file **out) {
+    struct tty *t = curproc()->ctty;
+    if (!t) {
+        return -ENXIO;
+    }
+    return open_tty(t, flags | O_NOCTTY, out);
 }
 
 static long null_read(struct file *f, void *buf, size_t n) {
@@ -124,6 +147,9 @@ struct device {
 
 static const struct device devices[] = {
     {"console", S_IFCHR | 0620, 5, DEV(5, 1), console_open},
+    {"tty", S_IFCHR | 0666, 5, DEV(5, 0), ctty_open},
+    {"ttyS0", S_IFCHR | 0620, 5, DEV(4, 64), serial_open},
+    {"tty0", S_IFCHR | 0620, 5, DEV(4, 0), fb_open},
     {"null", S_IFCHR | 0666, 0, DEV(1, 3), null_open},
     {"zero", S_IFCHR | 0666, 0, DEV(1, 5), zero_open},
     {"full", S_IFCHR | 0666, 0, DEV(1, 7), full_open},
@@ -213,7 +239,15 @@ int devfs_open(struct vnode *vn, int flags, struct file **out) {
     if (err) {
         return err;
     }
-    (*out)->vnode = vnode_ref(vn);
+    uint64_t real = vn->ino;
+    if (d->open == ctty_open) {
+        real = curproc()->ctty == tty_fb() ? FB_INO : SERIAL_INO;
+    }
+    if (real == vn->ino) {
+        (*out)->vnode = vnode_ref(vn);
+    } else if (vnode_get(vn->fs, real, &(*out)->vnode) != 0) {
+        (*out)->vnode = nullptr;
+    }
     return 0;
 }
 

@@ -14,6 +14,7 @@ struct file;
 struct ktimer;
 struct sigq;
 struct thread;
+struct tty;
 struct vmspace;
 
 typedef int pid_t;
@@ -39,6 +40,7 @@ struct proc {
     pid_t           pid;
     pid_t           pgid;
     pid_t           sid;
+    struct tty     *ctty;
     int             execed;
     char            name[PROC_NAME_MAX];
     int64_t         start_time;

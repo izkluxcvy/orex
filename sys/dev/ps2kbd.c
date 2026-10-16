@@ -1,6 +1,7 @@
 #include <stdint.h>
 
 #include <printf.h>
+#include <tty.h>
 
 #include "io.h"
 #include "ioapic.h"
@@ -51,11 +52,6 @@ static const char keymap_shift[128] = {
 };
 
 static int shift, ctrl, caps, extended;
-
-static void input(char c) {
-    char s[2] = {c >= ' ' && c < 0x7f ? c : '?', '\0'};
-    printf("ps2kbd: %x '%s'\n", (unsigned)(unsigned char)c, s);
-}
 
 static const char *special(int ext, uint8_t code) {
     if (ext) {
@@ -160,7 +156,7 @@ static void key(uint8_t sc) {
     const char *seq = special(ext, code);
     if (seq) {
         for (; *seq; seq++) {
-            input(*seq);
+            tty_input(tty_fb(), *seq);
         }
         return;
     }
@@ -182,7 +178,7 @@ static void key(uint8_t sc) {
         c &= 0x1f;
     }
     if (c) {
-        input(c);
+        tty_input(tty_fb(), c);
     }
 }
 

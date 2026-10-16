@@ -1,6 +1,7 @@
 #include <stdint.h>
 
 #include <printf.h>
+#include <tty.h>
 
 #include "io.h"
 #include "ioapic.h"
@@ -10,12 +11,22 @@
 #define COM1_PORT 0x3f8
 #define COM1_IRQ  4
 
+static struct tty ttys0;
+
 static int transmit_ready() { return inb(COM1_PORT + 5) & 0x20; }
 
 void serial_putc(char c) {
     while (!transmit_ready()) {
     }
     outb(COM1_PORT, (uint8_t)c);
+}
+
+static size_t serial_output(struct tty *t, const char *p, size_t n) {
+    (void)t;
+    for (size_t i = 0; i < n; i++) {
+        serial_putc(p[i]);
+    }
+    return n;
 }
 
 void serial_init() {
@@ -33,12 +44,15 @@ void serial_init() {
 static void serial_irq(struct trapframe *tf) {
     (void)tf;
     while (inb(COM1_PORT + 5) & 0x01) {
-        printf("serial: %x\n", (unsigned)inb(COM1_PORT));
+        tty_input(&ttys0, (char)inb(COM1_PORT));
     }
 }
 
 void serial_init_late() {
+    tty_init(&ttys0, serial_output);
     irq_register(IRQ_VECTOR_ISA + COM1_IRQ, serial_irq);
     ioapic_route_isa(COM1_IRQ, IRQ_VECTOR_ISA + COM1_IRQ);
     outb(COM1_PORT + 1, 0x01);
 }
+
+struct tty *tty_serial() { return ttys0.output ? &ttys0 : nullptr; }

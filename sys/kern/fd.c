@@ -135,6 +135,32 @@ long sys_lseek(long fd, long offset, long whence) {
     return f ? vfs_lseek(f, offset, (int)whence) : -EBADF;
 }
 
+#define FIONCLEX 0x5450
+#define FIOCLEX  0x5451
+#define FIONBIO  0x5421
+
+long sys_ioctl(long fd, long req, void *arg) {
+    struct file *f = fd_get_io(fd);
+    if (!f) {
+        return -EBADF;
+    }
+    if (req == FIOCLEX || req == FIONCLEX) {
+        curproc()->fd_flags[fd] =
+            (uint8_t)(req == FIOCLEX ? curproc()->fd_flags[fd] | FD_CLOEXEC
+                                     : curproc()->fd_flags[fd] & ~FD_CLOEXEC);
+        return 0;
+    }
+    if (req == FIONBIO) {
+        int on;
+        if (copy_from_user(&on, arg, sizeof(on))) {
+            return -EFAULT;
+        }
+        f->flags = on ? f->flags | O_NONBLOCK : f->flags & ~O_NONBLOCK;
+        return 0;
+    }
+    return f->ops->ioctl ? f->ops->ioctl(f, (unsigned long)req, arg) : -ENOTTY;
+}
+
 long sys_close(long fd) {
     if (fd < 0 || fd >= PROC_FD_MAX) {
         return -EBADF;

@@ -11,6 +11,7 @@
 #include <signal.h>
 #include <spinlock.h>
 #include <thread.h>
+#include <tty.h>
 #include <vfs.h>
 #include <vm.h>
 #include <waitq.h>
@@ -102,10 +103,12 @@ static void proc_start(struct proc *p, struct proc *parent) {
     p->threads->utid = p->pid;
     p->pgid          = parent->pgid;
     p->sid           = parent->sid;
+    p->ctty          = parent->ctty;
     p->cwd           = parent->cwd ? vnode_ref(parent->cwd) : nullptr;
     if (p->pid == 1) {
         initproc = p;
         p->pgid = p->sid = 1;
+        p->ctty          = nullptr;
     }
     p->all_next      = proc_list;
     proc_list        = p;
@@ -333,6 +336,9 @@ void proc_thread_exit(int status) {
          c              = c->sibling) {
         groups[ngroups++] = c->pgid;
     }
+    if (p->pid == p->sid) {
+        tty_session_ended_locked(p);
+    }
 
     struct proc *heir = (initproc && initproc != p) ? initproc : &proc0;
     while (p->children) {
@@ -520,6 +526,7 @@ pid_t proc_setsid() {
     }
     if (ret > 0) {
         self->sid = self->pgid = self->pid;
+        self->ctty             = nullptr;
     }
     spin_unlock_irqrestore(&sched_lock, flags);
     return ret;

@@ -147,3 +147,25 @@ void printf(const char *fmt, ...) {
     vprintf(fmt, args);
     va_end(args);
 }
+
+void printf_write_raw(const char *s, size_t n) {
+    uint64_t flags;
+    int      taken = out_lock(&flags);
+    for (size_t i = 0; i < n; i++) {
+        emit(s[i]);
+    }
+    out_unlock(taken, flags);
+}
+
+void printf_write_raw_except(void (*skip)(char c), const char *s, size_t n) {
+    uint64_t flags;
+    int      taken = out_lock(&flags);
+    for (size_t i = 0; i < n; i++) {
+        for (int k = 0; k < sink_count; k++) {
+            if (sinks[k] != skip) {
+                sinks[k](s[i]);
+            }
+        }
+    }
+    out_unlock(taken, flags);
+}

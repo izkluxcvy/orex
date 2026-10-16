@@ -15,7 +15,7 @@ ROOT := $(BINDIR)/root
 TARGET := $(BINDIR)/initramfs.cpio
 
 LIB_OBJS := lib/crt0.o lib/ulib.o
-PROGS := hello init
+PROGS := hello init cat
 
 ULIB_BINS := $(PROGS:%=$(ROOT)/bin/%)
 BINS := $(ULIB_BINS)

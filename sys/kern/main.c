@@ -6,6 +6,7 @@
 #include <ktime.h>
 #include <machdep.h>
 #include <mm.h>
+#include <panic.h>
 #include <printf.h>
 #include <proc.h>
 #include <ramfs.h>
@@ -60,5 +61,9 @@ void kern_main(struct boot_info *boot_info) {
             printf("main: pid %d exited with status %d\n", pid,
                    (status >> 8) & 0xff);
         }
+        if (pid == 1) {
+            panic("main: init exited");
+        }
     }
+    panic("main: no init");
 }

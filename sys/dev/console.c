@@ -157,6 +157,11 @@ static void put_glyph(uint8_t ch) {
     }
 }
 
+void console_size(int *r, int *c) {
+    *r = fb ? rows : 24;
+    *c = fb ? cols : 80;
+}
+
 static void reset() {
     for (int c = 0; c < MAX_COLS; c++) {
         tab_stop[c] = c && c % 8 == 0;

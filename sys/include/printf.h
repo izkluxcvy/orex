@@ -10,3 +10,5 @@ void printf_add_sink(void (*putc)(char c));
 void printf(const char *fmt, ...);
 void vprintf(const char *fmt, va_list args);
 void printf_write(const char *s, size_t n);
+void printf_write_raw(const char *s, size_t n);
+void printf_write_raw_except(void (*skip)(char c), const char *s, size_t n);

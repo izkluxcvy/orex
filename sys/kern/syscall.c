@@ -392,6 +392,8 @@ long syscall_dispatch(long nr, long a0, long a1, long a2, long a3, long a4,
         return sys_getcwd((char *)a0, a1);
     case SYS_lseek:
         return sys_lseek(a0, a1, a2);
+    case SYS_ioctl:
+        return sys_ioctl(a0, a1, (void *)a2);
     case SYS_rt_sigaction:
         return sys_rt_sigaction(a0, (const struct k_sigaction *)a1,
                                 (struct k_sigaction *)a2, a3);

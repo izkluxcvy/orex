@@ -160,7 +160,8 @@ def main():
     ap.add_argument("--esp", type=int, default=64, help="the EFI system partition's, in MiB")
     ap.add_argument("--root", help="a file system image, to be the third partition")
     ap.add_argument("files", nargs="*", help="NAME=file, into the EFI system partition")
-    args = ap.parse_args()
+    # args = ap.parse_args()
+    args = ap.parse_intermixed_args()
 
     total = args.size * MIB
     with open(args.mbr, "rb") as f:
