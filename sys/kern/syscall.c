@@ -1,6 +1,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <cred.h>
 #include <errno.h>
 #include <exec.h>
 #include <fd.h>
@@ -212,6 +213,31 @@ static long sys_getdents64(long fd, void *ubuf, long count) {
     return used;
 }
 
+static long sys_faccessat(long dirfd, const char *upath, long mode,
+                          long flags) {
+    if ((mode & ~(long)(R_OK | W_OK | X_OK)) ||
+        (flags & ~(long)(AT_EACCESS | AT_SYMLINK_NOFOLLOW))) {
+        return -EINVAL;
+    }
+    struct upath u;
+    long         err = get_path(dirfd, upath, &u);
+    if (err) {
+        return err;
+    }
+    int vflags = ((flags & AT_SYMLINK_NOFOLLOW) ? 0 : VFS_FOLLOW) |
+                 ((flags & AT_EACCESS) ? 0 : VFS_REAL);
+    err        = vfs_access(u.base, u.path, (int)mode, vflags);
+    put_path(&u);
+    return err;
+}
+
+static long sys_umask(long mask) {
+    struct proc *p   = curproc();
+    long         old = p->umask;
+    p->umask         = (uint32_t)mask & 0777;
+    return old;
+}
+
 static long sys_chdir(const char *upath) {
     struct vnode *vn;
     long          err = at_vnode(AT_FDCWD, upath, 0, &vn);
@@ -382,8 +408,44 @@ long syscall_dispatch(long nr, long a0, long a1, long a2, long a3, long a4,
         return sys_fstatat(a0, (const char *)a1, (struct stat *)a2, a3);
     case SYS_getdents64:
         return sys_getdents64(a0, (void *)a1, a2);
+    case SYS_access:
+        return sys_faccessat(AT_FDCWD, (const char *)a0, a1, 0);
+    case SYS_faccessat:
+        return sys_faccessat(a0, (const char *)a1, a2, 0);
+    case SYS_faccessat2:
+        return sys_faccessat(a0, (const char *)a1, a2, a3);
     case SYS_fcntl:
         return sys_fcntl(a0, a1, a2);
+    case SYS_umask:
+        return sys_umask(a0);
+    case SYS_getuid:
+        return sys_getuid();
+    case SYS_geteuid:
+        return sys_geteuid();
+    case SYS_getgid:
+        return sys_getgid();
+    case SYS_getegid:
+        return sys_getegid();
+    case SYS_setuid:
+        return sys_setuid(a0);
+    case SYS_setgid:
+        return sys_setgid(a0);
+    case SYS_setreuid:
+        return sys_setreuid(a0, a1);
+    case SYS_setregid:
+        return sys_setregid(a0, a1);
+    case SYS_setresuid:
+        return sys_setresuid(a0, a1, a2);
+    case SYS_setresgid:
+        return sys_setresgid(a0, a1, a2);
+    case SYS_getresuid:
+        return sys_getresuid((uid_t *)a0, (uid_t *)a1, (uid_t *)a2);
+    case SYS_getresgid:
+        return sys_getresgid((gid_t *)a0, (gid_t *)a1, (gid_t *)a2);
+    case SYS_getgroups:
+        return sys_getgroups(a0, (gid_t *)a1);
+    case SYS_setgroups:
+        return sys_setgroups(a0, (const gid_t *)a1);
     case SYS_chdir:
         return sys_chdir((const char *)a0);
     case SYS_fchdir:

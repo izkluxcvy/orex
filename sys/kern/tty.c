@@ -1,6 +1,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <cred.h>
 #include <errno.h>
 #include <ktime.h>
 #include <printf.h>
@@ -642,7 +643,12 @@ long tty_ioctl(struct tty *t, struct file *f, unsigned long req, void *arg) {
         if (p->sid != p->pid || p->ctty) {
             ret = p->ctty == t ? 0 : -EPERM;
         } else if (t->session && t->session != p->sid) {
-            ret = -EPERM;
+            if ((long)arg == 1 && p->cred.euid == 0) {
+                disassociate(t);
+                acquire(t, p);
+            } else {
+                ret = -EPERM;
+            }
         } else {
             acquire(t, p);
         }

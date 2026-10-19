@@ -3,6 +3,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <cred.h>
 #include <ktime.h>
 #include <signal.h>
 #include <spinlock.h>
@@ -54,6 +55,8 @@ struct proc {
     struct file    *fds[PROC_FD_MAX];
     uint8_t         fd_flags[PROC_FD_MAX];
     struct vnode   *cwd;
+    struct cred     cred;
+    uint32_t        umask;
 
     struct proc *parent;
     struct proc *children;

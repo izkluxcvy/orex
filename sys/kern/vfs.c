@@ -1,6 +1,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <cred.h>
 #include <errno.h>
 #include <kmalloc.h>
 #include <memcpy.h>
@@ -154,6 +155,28 @@ void vnode_put(struct vnode *vn) {
     }
 }
 
+// --- Permissions -------------------------------------------------------------
+
+int vfs_permission(struct vnode *vn, int mask, int real) {
+    struct cred *c   = &curproc()->cred;
+    uid_t        uid = real ? c->ruid : c->euid;
+
+    if (uid == 0) {
+        if ((mask & X_OK) && !S_ISDIR(vn->mode) && !(vn->mode & 0111)) {
+            return -EACCES;
+        }
+        return 0;
+    }
+
+    uint32_t bits = vn->mode;
+    if (uid == vn->uid) {
+        bits >>= 6;
+    } else if (cred_in_group(c, vn->gid, real)) {
+        bits >>= 3;
+    }
+    return ((bits & (uint32_t)mask) == (uint32_t)mask) ? 0 : -EACCES;
+}
+
 static int is_dot(const char *name, size_t len) {
     return name[0] == '.' && (len == 1 || (len == 2 && name[1] == '.'));
 }
@@ -291,6 +314,9 @@ static int walk(struct vnode *base, const char *path, int flags,
             err = -ENOTDIR;
             break;
         }
+        if ((err = vfs_permission(cur, X_OK, flags & VFS_REAL)) != 0) {
+            break;
+        }
         if (last && (flags & W_PARENT)) {
             memcpy(w->name, c, n);
             w->name[n] = '\0';
@@ -343,7 +369,7 @@ static int walk(struct vnode *base, const char *path, int flags,
 int vfs_lookup(struct vnode *base, const char *path, int flags,
                struct vnode **out) {
     struct walk w;
-    int         err = walk(base, path, flags & VFS_FOLLOW, &w);
+    int         err = walk(base, path, flags & (VFS_FOLLOW | VFS_REAL), &w);
     if (!err) {
         *out = w.vn;
     }
@@ -514,10 +540,17 @@ int vfs_open(struct vnode *base, const char *path, int flags, uint32_t mode,
         return err == -ENOENT && (flags & O_CREAT) ? -EROFS : err;
     }
 
+    int acc  = flags & O_ACCMODE;
+    int need = (acc == O_RDONLY   ? R_OK
+                : acc == O_WRONLY ? W_OK
+                                  : R_OK | W_OK) |
+               ((flags & O_TRUNC) ? W_OK : 0);
     if ((flags & O_NOFOLLOW) && S_ISLNK(vn->mode)) {
         err = -ELOOP;
     } else if ((flags & O_DIRECTORY) && !S_ISDIR(vn->mode)) {
         err = -ENOTDIR;
+    } else {
+        err = vfs_permission(vn, need, 0);
     }
     if (!err) {
         err = vfs_open_vnode(vn, flags, out);
@@ -542,7 +575,9 @@ long vnode_read(struct vnode *vn, void *buf, size_t n, uint64_t off) {
     return (long)got;
 }
 
-int vfs_exec_check(struct vnode *vn) { return S_ISREG(vn->mode) ? 0 : -EACCES; }
+int vfs_exec_check(struct vnode *vn) {
+    return S_ISREG(vn->mode) ? vfs_permission(vn, X_OK, 0) : -EACCES;
+}
 
 int vfs_exec_open(const char *path, struct vnode **out) {
     struct vnode *vn;
@@ -550,7 +585,7 @@ int vfs_exec_open(const char *path, struct vnode **out) {
     if (err) {
         return err;
     }
-    err = S_ISREG(vn->mode) ? 0 : -EACCES;
+    err = S_ISREG(vn->mode) ? vfs_permission(vn, X_OK, 0) : -EACCES;
     if (err) {
         vnode_put(vn);
         return err;
@@ -559,9 +594,29 @@ int vfs_exec_open(const char *path, struct vnode **out) {
     return 0;
 }
 
+int vfs_access(struct vnode *base, const char *path, int mask, int flags) {
+    struct vnode *vn;
+    int           err = vfs_lookup(base, path, flags, &vn);
+    if (err) {
+        return err;
+    }
+    int real = (flags & VFS_REAL) != 0;
+    err      = mask ? vfs_permission(vn, mask, real) : 0;
+    if (!err && (mask & W_OK) &&
+        (S_ISREG(vn->mode) || S_ISDIR(vn->mode) || S_ISLNK(vn->mode))) {
+        err = -EROFS;
+    }
+    vnode_put(vn);
+    return err;
+}
+
 int vfs_chdir(struct vnode *dir) {
     if (!S_ISDIR(dir->mode)) {
         return -ENOTDIR;
+    }
+    int err = vfs_permission(dir, X_OK, 0);
+    if (err) {
+        return err;
     }
     struct proc  *p     = curproc();
     struct vnode *fresh = vnode_ref(dir);

@@ -1,6 +1,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <cred.h>
 #include <elf.h>
 #include <errno.h>
 #include <exec.h>
@@ -202,8 +203,8 @@ int exec_args_from_user(struct exec_args *a, const char *const *uargv,
 }
 
 int exec_setup_stack(struct vmspace *vm, const struct exec_args *a,
-                     const struct exec_image *img, const char *path,
-                     uintptr_t *rsp) {
+                     const struct exec_image *img, const struct cred *c,
+                     const char *path, uintptr_t *rsp) {
     uintptr_t top  = vm->stack_top;
     uint64_t  span = USER_STACK_MAX;
     int       err =
@@ -227,8 +228,13 @@ int exec_setup_stack(struct vmspace *vm, const struct exec_args *a,
         AT_BASE,   img->interp_base,
         AT_FLAGS,  0,
         AT_ENTRY,  img->entry,
+        AT_UID,    c->ruid,
+        AT_EUID,   c->euid,
+        AT_GID,    c->rgid,
+        AT_EGID,   c->egid,
         AT_HWCAP,  cpuid(1).d,
         AT_CLKTCK, 100,
+        AT_SECURE, c->euid != c->ruid || c->egid != c->rgid,
         AT_EXECFN, execfn,
         AT_NULL,   0,
     };

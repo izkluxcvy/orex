@@ -31,6 +31,13 @@ static void run(char **argv) {
         tcsetpgrp(0, getpid());
         signal(SIGINT, SIG_DFL);
         signal(22, SIG_DFL);
+        if (strcmp(argv[0], "as") == 0 && argv[1] && argv[2]) {
+            int id = (int)strtol(argv[1], nullptr, 10);
+            setgroups(0, nullptr);
+            setgid(id);
+            setuid(id);
+            argv += 2;
+        }
         if (strchr(argv[0], '/')) {
             execve(argv[0], argv, envp);
         } else if (strlen(argv[0]) < sizeof(path) - 5) {
@@ -71,7 +78,6 @@ int main() {
     signal(SIGINT, SIG_IGN);
     signal(22, SIG_IGN);
     ioctl(0, 0x540e, nullptr);
-    puts("\nShell. Try: hello a b c\n");
     while (1) {
         puts("$ ");
         long n = read(0, line, sizeof(line) - 1);

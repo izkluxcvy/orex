@@ -3,6 +3,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+struct cred;
 struct vmspace;
 struct vnode;
 
@@ -38,5 +39,5 @@ int exec_load(struct vmspace *vm, struct vnode *vn, uintptr_t base,
               struct exec_image *img, char *interp, int main);
 
 int exec_setup_stack(struct vmspace *vm, const struct exec_args *a,
-                     const struct exec_image *img, const char *path,
-                     uintptr_t *rsp);
+                     const struct exec_image *img, const struct cred *c,
+                     const char *path, uintptr_t *rsp);

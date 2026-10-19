@@ -1,6 +1,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <cred.h>
 #include <errno.h>
 #include <kmalloc.h>
 #include <ktime.h>
@@ -330,6 +331,9 @@ long sys_clock_settime(long clock, const struct k_timespec *uts) {
     }
     if (clock != CLOCK_REALTIME) {
         return -EINVAL;
+    }
+    if (curproc()->cred.euid != 0) {
+        return -EPERM;
     }
     uint64_t flags = spin_lock_irqsave(&sched_lock);
     real_offset    = ns - (int64_t)time_mono();

@@ -19,7 +19,7 @@
 #include "pmap.h"
 #include "user.h"
 
-struct proc         proc0    = {.name = "kernel"};
+struct proc         proc0    = {.name = "kernel", .umask = 022};
 static pid_t        next_pid = 1;
 static struct proc *initproc;
 struct proc        *proc_list;
@@ -105,6 +105,7 @@ static void proc_start(struct proc *p, struct proc *parent) {
     p->sid           = parent->sid;
     p->ctty          = parent->ctty;
     p->cwd           = parent->cwd ? vnode_ref(parent->cwd) : nullptr;
+    p->umask         = parent->umask;
     if (p->pid == 1) {
         initproc = p;
         p->pgid = p->sid = 1;
@@ -129,9 +130,20 @@ static void *user_start(void *arg) {
     usermode_enter(e.rip, e.rsp);
 }
 
+static void exec_creds(struct cred *c, const struct vnode *file) {
+    if (file->mode & S_ISUID) {
+        c->euid = file->uid;
+    }
+    if (file->mode & S_ISGID) {
+        c->egid = file->gid;
+    }
+    c->suid = c->euid;
+    c->sgid = c->egid;
+}
+
 static int load_program(struct vmspace *vm, const char *path,
                         struct vnode *given, const struct exec_args *a,
-                        struct user_entry *e) {
+                        struct user_entry *e, struct cred *cred) {
     struct vnode *file = given ? vnode_ref(given) : nullptr;
     int err = given ? vfs_exec_check(given) : vfs_exec_open(path, &file);
     if (err) {
@@ -159,7 +171,8 @@ static int load_program(struct vmspace *vm, const char *path,
     }
     kfree(interp);
     if (!err) {
-        err    = exec_setup_stack(vm, a, &img, path, &e->rsp);
+        exec_creds(cred, file);
+        err    = exec_setup_stack(vm, a, &img, cred, path, &e->rsp);
         e->rip = start;
     }
     vnode_put(file);
@@ -176,8 +189,9 @@ struct proc *proc_spawn(const char *path, const char *const *argv,
     struct exec_args   a;
     struct user_entry *e = kmalloc(sizeof(*e));
     int err              = e ? exec_args_from_kernel(&a, argv, envp) : -ENOMEM;
+    p->cred              = curproc()->cred;
     if (!err) {
-        err = load_program(p->vm, path, nullptr, &a, e);
+        err = load_program(p->vm, path, nullptr, &a, e, &p->cred);
         exec_args_free(&a);
     }
 
@@ -212,7 +226,8 @@ int proc_exec(const char *path, struct vnode *given,
         return -ENOMEM;
     }
     struct user_entry e;
-    int               err = load_program(vm, path, given, a, &e);
+    struct cred       cred = p->cred;
+    int               err  = load_program(vm, path, given, a, &e, &cred);
     if (err) {
         vm_destroy(vm);
         return err;
@@ -231,6 +246,7 @@ int proc_exec(const char *path, struct vnode *given,
     time_exec(p);
     p->execed = 1;
     fd_close_on_exec(p);
+    p->cred = cred;
     context_exec(e.rip, e.rsp);
     return 0;
 }
@@ -255,6 +271,7 @@ pid_t proc_fork() {
     context_setup_fork(child->threads);
     sched_setscheduler(child->threads, curthread->policy,
                        curthread->base_priority);
+    child->cred = parent->cred;
     signal_fork(child, parent);
     time_fork(child);
     fd_fork(child, parent);
@@ -286,6 +303,7 @@ static void child_info(struct proc *c, struct siginfo *info) {
     *info      = (struct siginfo){.si_signo = SIGCHLD,
                                   .si_code  = killed ? CLD_KILLED : CLD_EXITED,
                                   .pid      = c->pid,
+                                  .uid      = c->cred.ruid,
                                   .status   = killed ? c->status & 0x7f
                                                      : (c->status >> 8) & 0xff};
 }
@@ -424,6 +442,7 @@ pid_t proc_wait(pid_t pid, int *status, int options, struct siginfo *info,
                         .si_signo = SIGCHLD,
                         .si_code  = stop ? CLD_STOPPED : CLD_CONTINUED,
                         .pid      = c->pid,
+                        .uid      = c->cred.ruid,
                         .status   = stop ? c->stop_sig : SIGCONT};
                 }
                 if (!(options & WNOWAIT)) {

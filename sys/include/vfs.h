@@ -154,17 +154,21 @@ int           vfs_mount(const char *path, struct fs *fs);
 struct vnode *vfs_root();
 
 #define VFS_FOLLOW 1
+#define VFS_REAL   2
 
 int vfs_lookup(struct vnode *base, const char *path, int flags,
                struct vnode **out);
 int vfs_open(struct vnode *base, const char *path, int flags, uint32_t mode,
              struct file **out);
 int vfs_open_vnode(struct vnode *vn, int flags, struct file **out);
+int vfs_access(struct vnode *base, const char *path, int mask, int flags);
 
 int  vfs_chdir(struct vnode *dir);
 long vfs_getcwd(char *buf, size_t size);
-int  vfs_exec_open(const char *path, struct vnode **out);
-int  vfs_exec_check(struct vnode *vn);
+
+int vfs_permission(struct vnode *vn, int mask, int real);
+int vfs_exec_open(const char *path, struct vnode **out);
+int vfs_exec_check(struct vnode *vn);
 
 long vfs_lseek(struct file *f, long offset, int whence);
 

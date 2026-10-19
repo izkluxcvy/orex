@@ -15,7 +15,7 @@ ROOT := $(BINDIR)/root
 TARGET := $(BINDIR)/initramfs.cpio
 
 LIB_OBJS := lib/crt0.o lib/ulib.o
-PROGS := hello init cat
+PROGS := hello init cat id
 
 ULIB_BINS := $(PROGS:%=$(ROOT)/bin/%)
 BINS := $(ULIB_BINS)
@@ -41,6 +41,8 @@ $(TARGET): owners tools/mkcpio.py $(BINS) $(STATIC)
 	find $(ROOT) -type d -exec chmod 0755 {} +
 	find $(ROOT) -type f -exec chmod 0644 {} +
 	chmod 0755 $(BINS)
+	cp $(ROOT)/bin/id $(ROOT)/bin/rootid && chmod 4755 $(ROOT)/bin/rootid
+	chmod 0600 $(ROOT)/etc/shadow
 	python3 tools/mkcpio.py $(ROOT) owners $(TARGET)
 
 -include $(OBJS:.o=.d)

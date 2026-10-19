@@ -88,6 +88,7 @@ static void tell_parent(struct proc *p, int code, int status) {
         struct siginfo info = {.si_signo = SIGCHLD,
                                .si_code  = code,
                                .pid      = p->pid,
+                               .uid      = p->cred.ruid,
                                .status   = status};
         signal_send_info_locked(up, &info);
     }
@@ -474,9 +475,18 @@ void signal_exit(struct proc *p) {
     spin_unlock_irqrestore(&sched_lock, flags);
 }
 
+static int may_signal(struct proc *from, struct proc *to) {
+    const struct cred *f = &from->cred, *t = &to->cred;
+    return f->euid == 0 || f->ruid == t->ruid || f->ruid == t->suid ||
+           f->euid == t->ruid || f->euid == t->suid;
+}
+
 static struct siginfo user_info(int sig, int code) {
     struct proc *self = curproc();
-    return (struct siginfo){.si_signo = sig, .si_code = code, .pid = self->pid};
+    return (struct siginfo){.si_signo = sig,
+                            .si_code  = code,
+                            .pid      = self->pid,
+                            .uid      = self->cred.ruid};
 }
 
 long sys_kill(long pid, long sig) {
@@ -498,7 +508,10 @@ long sys_kill(long pid, long sig) {
         if (!match || p->state != PROC_ALIVE) {
             continue;
         }
-        found   = 1;
+        found = 1;
+        if (!may_signal(self, p)) {
+            continue;
+        }
         allowed = 1;
         if (sig) {
             long r = signal_send_info_locked(p, &info);
@@ -521,6 +534,8 @@ long sys_tgkill(long tgid, long tid, long sig) {
     if (!t || (tgid != -1 && t->proc->pid != tgid) ||
         t->proc->state != PROC_ALIVE) {
         err = -ESRCH;
+    } else if (!may_signal(curproc(), t->proc)) {
+        err = -EPERM;
     } else if (sig) {
         err = signal_send_thread_locked(t, &info);
     }
@@ -542,9 +557,11 @@ long sys_rt_sigqueueinfo(long pid, long sig, const struct siginfo *uinfo) {
     }
     info.si_signo    = (int)sig;
     info.pid         = self->pid;
+    info.uid         = self->cred.ruid;
     uint64_t     f   = spin_lock_irqsave(&sched_lock);
     struct proc *p   = proc_find_locked((pid_t)pid);
     long         err = !p || p->state != PROC_ALIVE ? -ESRCH
+                       : !may_signal(self, p)       ? -EPERM
                        : sig ? signal_send_info_locked(p, &info)
                              : 0;
     spin_unlock_irqrestore(&sched_lock, f);
