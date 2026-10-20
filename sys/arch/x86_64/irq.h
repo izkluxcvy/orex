@@ -7,6 +7,7 @@
 #define IRQ_VECTOR_BASE     0x20
 #define IRQ_VECTOR_TIMER    0x20
 #define IRQ_VECTOR_ISA      0x30
+#define IRQ_VECTOR_MSI      0x40
 #define IRQ_VECTOR_SPURIOUS 0xFF
 
 static inline uint64_t irq_save() {
@@ -32,6 +33,7 @@ static inline void irq_restore(uint64_t flags) {
 
 typedef void (*irq_handler_t)(struct trapframe *tf);
 
-void irq_init();
-void irq_register(uint8_t vector, irq_handler_t handler);
-void irq_dispatch(struct trapframe *tf);
+void    irq_init();
+void    irq_register(uint8_t vector, irq_handler_t handler);
+uint8_t irq_alloc_vector();
+void    irq_dispatch(struct trapframe *tf);

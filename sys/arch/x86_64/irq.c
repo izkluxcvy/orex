@@ -24,6 +24,11 @@ void irq_register(uint8_t vector, irq_handler_t handler) {
     handlers[vector - IRQ_VECTOR_BASE] = handler;
 }
 
+uint8_t irq_alloc_vector() {
+    static unsigned next = IRQ_VECTOR_MSI;
+    return next < IRQ_VECTOR_SPURIOUS ? (uint8_t)next++ : 0;
+}
+
 void irq_dispatch(struct trapframe *tf) {
     uint8_t vector = (uint8_t)tf->vector;
 

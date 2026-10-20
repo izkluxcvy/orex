@@ -7,6 +7,7 @@
 #include <machdep.h>
 #include <mm.h>
 #include <panic.h>
+#include <pci.h>
 #include <printf.h>
 #include <proc.h>
 #include <ramfs.h>
@@ -25,6 +26,20 @@ void kern_main(struct boot_info *boot_info) {
     sched_init();
     machdep_init_late();
     time_init();
+    pci_init();
+
+    for (int i = 0; pci_at(i); i++) {
+        struct pci_dev *d = pci_at(i);
+        printf("pci: %02x:%02x.%x %04x:%04x class %02x.%02x", d->bus, d->slot,
+               d->func, d->vendor, d->device, d->class, d->subclass);
+        for (int b = 0; b < 6; b++) {
+            if (d->bar[b]) {
+                printf(", bar%d %lx (%lu KiB)", b, d->bar[b],
+                       d->bar_len[b] / 1024);
+            }
+        }
+        printf("\n");
+    }
 
     struct fs *root = nullptr;
     if (bi.initrd_size) {

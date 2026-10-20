@@ -25,7 +25,7 @@ SRCS += arch/$(ARCH)/entry.c arch/$(ARCH)/init.c arch/$(ARCH)/serial.c \
 		arch/$(ARCH)/apic.c arch/$(ARCH)/switch.c arch/$(ARCH)/rtc.c \
 		arch/$(ARCH)/uaccess.c arch/$(ARCH)/user.c arch/$(ARCH)/ioapic.c
 SRCS += mm/init.c mm/pmm.c mm/kmalloc.c
-SRCS += dev/console.c dev/ps2kbd.c
+SRCS += dev/console.c dev/ps2kbd.c dev/pci.c
 SRCS += fs/ramfs.c fs/devfs.c
 SRCS += lib/printf.c lib/memcmp.c
 OBJS := $(SRCS:.c=.o)
