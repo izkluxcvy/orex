@@ -14,6 +14,13 @@ LDFLAGS := -T user.ld -static -nostdlib
 ROOT := $(BINDIR)/root
 TARGET := $(BINDIR)/initramfs.cpio
 
+DISKROOT := $(BINDIR)/diskroot
+ROOTFS := $(BINDIR)/rootfs.ext2
+MKFS := /usr/sbin/mkfs.ext2
+DEBUGFS := /usr/sbin/debugfs
+ROOTFS_SIZE = 32M
+ROOTFS_BLOCK = 1024
+
 LIB_OBJS := lib/crt0.o lib/ulib.o
 PROGS := hello init cat id
 
@@ -25,7 +32,7 @@ OBJS := $(LIB_OBJS) $(PROGS:%=bin/%.o)
 
 .PHONY: all
 
-all: $(TARGET)
+all: $(TARGET) $(ROOTFS)
 
 %.o: %.c
 	$(CC) $(CFLAGS) -c -o $@ $<
@@ -44,6 +51,17 @@ $(TARGET): owners tools/mkcpio.py $(BINS) $(STATIC)
 	cp $(ROOT)/bin/id $(ROOT)/bin/rootid && chmod 4755 $(ROOT)/bin/rootid
 	chmod 0600 $(ROOT)/etc/shadow
 	python3 tools/mkcpio.py $(ROOT) owners $(TARGET)
+
+$(ROOTFS): $(TARGET)
+	rm -rf $(DISKROOT)
+	cp -a $(ROOT) $(DISKROOT)
+	echo ext2 > $(DISKROOT)/etc/rootfs
+	chmod 0644 $(DISKROOT)/etc/rootfs
+	$(MKFS) -q -F -b $(ROOTFS_BLOCK) -d $(DISKROOT) $@ $(ROOTFS_SIZE)
+	cd $(DISKROOT) && find . -mindepth 1 | sed 's|^\.||' | \
+		awk '{printf "sif %s uid 0\nsif %s gid 0\n", $$0, $$0}' > ../rootfs.chown
+	grep -v '^#' owners | awk 'NF == 3 {printf "sif /%s uid %s\nsif /%s gid %s\n", $$1, $$2, $$1, $$3}' >> $(BINDIR)/rootfs.chown
+	$(DEBUGFS) -w -f $(BINDIR)/rootfs.chown $@ > /dev/null 2>&1
 
 -include $(OBJS:.o=.d)
 

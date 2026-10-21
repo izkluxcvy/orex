@@ -18,14 +18,14 @@ LDFLAGS := -T arch/$(ARCH)/kernel.ld -z norelro --image-base=0x100000 --static
 SRCS := kern/main.c kern/cpu.c kern/panic.c kern/spinlock.c kern/thread.c \
 		kern/sched.c kern/waitq.c kern/mutex.c kern/time.c kern/syscall.c \
 		kern/vfs.c kern/vm.c kern/proc.c kern/exec.c kern/fd.c kern/pipe.c \
-		kern/signal.c kern/tty.c kern/cred.c
+		kern/signal.c kern/tty.c kern/cred.c kern/blk.c
 SRCS += arch/$(ARCH)/entry.c arch/$(ARCH)/init.c arch/$(ARCH)/serial.c \
 		arch/$(ARCH)/mem_.c arch/$(ARCH)/gdt.c arch/$(ARCH)/idt.c \
 		arch/$(ARCH)/trap.c arch/$(ARCH)/pmap.c arch/$(ARCH)/irq.c \
 		arch/$(ARCH)/apic.c arch/$(ARCH)/switch.c arch/$(ARCH)/rtc.c \
 		arch/$(ARCH)/uaccess.c arch/$(ARCH)/user.c arch/$(ARCH)/ioapic.c
 SRCS += mm/init.c mm/pmm.c mm/kmalloc.c
-SRCS += dev/console.c dev/ps2kbd.c dev/pci.c
+SRCS += dev/console.c dev/ps2kbd.c dev/pci.c dev/virtio.c dev/virtio_blk.c
 SRCS += fs/ramfs.c fs/devfs.c
 SRCS += lib/printf.c lib/memcmp.c
 OBJS := $(SRCS:.c=.o)

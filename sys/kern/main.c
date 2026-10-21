@@ -1,8 +1,10 @@
 #include <stdint.h>
 
+#include <blk.h>
 #include <boot_info.h>
 #include <console.h>
 #include <devfs.h>
+#include <kmalloc.h>
 #include <ktime.h>
 #include <machdep.h>
 #include <mm.h>
@@ -14,6 +16,7 @@
 #include <sched.h>
 #include <thread.h>
 #include <vfs.h>
+#include <virtio.h>
 
 #include "pmap.h"
 
@@ -27,19 +30,17 @@ void kern_main(struct boot_info *boot_info) {
     machdep_init_late();
     time_init();
     pci_init();
+    virtio_blk_init();
 
-    for (int i = 0; pci_at(i); i++) {
-        struct pci_dev *d = pci_at(i);
-        printf("pci: %02x:%02x.%x %04x:%04x class %02x.%02x", d->bus, d->slot,
-               d->func, d->vendor, d->device, d->class, d->subclass);
-        for (int b = 0; b < 6; b++) {
-            if (d->bar[b]) {
-                printf(", bar%d %lx (%lu KiB)", b, d->bar[b],
-                       d->bar_len[b] / 1024);
-            }
+    uint8_t *sector = kmalloc(512);
+    for (int i = 0; sector && blk_at(i); i++) {
+        struct blkdev *d = blk_at(i);
+        if (d->read(d, 2, 1, sector) == 0) {
+            printf("main: %s: bytes 1080-1081 are %02x %02x\n", d->name,
+                   sector[56], sector[57]);
         }
-        printf("\n");
     }
+    kfree(sector);
 
     struct fs *root = nullptr;
     if (bi.initrd_size) {

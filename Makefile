@@ -21,7 +21,9 @@ disk: all
 		INITRD.IMG=$(BINDIR)/initramfs.cpio
 
 run: disk
-	qemu-system-$(ARCH) -m 1G -drive format=raw,file=$(DISK) -serial stdio
+	qemu-system-$(ARCH) -m 1G -drive format=raw,file=$(DISK) -serial stdio \
+		-drive if=none,id=root,format=raw,file=$(BINDIR)/rootfs.ext2 \
+		-device virtio-blk-pci,drive=root,disable-legacy=on
 
 clean:
 	find . -name '*.o' -delete
