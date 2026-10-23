@@ -4,7 +4,6 @@
 #include <boot_info.h>
 #include <console.h>
 #include <devfs.h>
-#include <kmalloc.h>
 #include <ktime.h>
 #include <machdep.h>
 #include <mm.h>
@@ -32,15 +31,21 @@ void kern_main(struct boot_info *boot_info) {
     pci_init();
     virtio_blk_init();
 
-    uint8_t *sector = kmalloc(512);
-    for (int i = 0; sector && blk_at(i); i++) {
-        struct blkdev *d = blk_at(i);
-        if (d->read(d, 2, 1, sector) == 0) {
-            printf("main: %s: bytes 1080-1081 are %02x %02x\n", d->name,
-                   sector[56], sector[57]);
+    blk_scan_partitions();
+    for (int i = 0; blk_at(i); i++) {
+        for (int round = 0; round < 2; round++) {
+            uint64_t t0 = time_mono();
+            for (uint64_t b = 0; b < 256; b++) {
+                struct buf *bf;
+                if (bread(blk_at(i), b, 4096, &bf) == 0) {
+                    brelse(bf);
+                }
+            }
+            printf("main: %s: 1 MiB read in %lu us, %lu KiB cached\n",
+                   blk_at(i)->name, (unsigned long)((time_mono() - t0) / 1000),
+                   (unsigned long)(blk_cache_bytes() / 1024));
         }
     }
-    kfree(sector);
 
     struct fs *root = nullptr;
     if (bi.initrd_size) {
@@ -57,6 +62,8 @@ void kern_main(struct boot_info *boot_info) {
     if (err) {
         printf("main: cannot mount devfs on /dev: %d\n", err);
     }
+
+    blk_start_flusher();
 
     static const char *const argv[] = {"/bin/init", nullptr};
     static const char *const envp[] = {"PATH=/bin", nullptr};

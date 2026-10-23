@@ -1,6 +1,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <blk.h>
 #include <cred.h>
 #include <errno.h>
 #include <exec.h>
@@ -416,6 +417,8 @@ long syscall_dispatch(long nr, long a0, long a1, long a2, long a3, long a4,
         return sys_faccessat(a0, (const char *)a1, a2, a3);
     case SYS_fcntl:
         return sys_fcntl(a0, a1, a2);
+    case SYS_sync:
+        return blk_sync(), 0;
     case SYS_umask:
         return sys_umask(a0);
     case SYS_getuid:
