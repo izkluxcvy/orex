@@ -93,7 +93,7 @@ struct vnode_ops {
 
 struct fs_ops {
     int (*vget)(struct fs *fs, uint64_t ino, struct vnode *vn);
-    int (*vput)(struct vnode *vn);
+    void (*vput)(struct vnode *vn);
     int (*open)(struct vnode *vn, int flags, struct file **out);
 };
 
@@ -104,6 +104,7 @@ struct fs {
     uint64_t                root_ino;
     uint32_t                dev;
     void                   *priv;
+    struct blkdev          *blk;
 };
 
 struct file_ops {

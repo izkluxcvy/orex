@@ -4,6 +4,7 @@
 #include <boot_info.h>
 #include <console.h>
 #include <devfs.h>
+#include <ext2.h>
 #include <ktime.h>
 #include <machdep.h>
 #include <mm.h>
@@ -32,28 +33,24 @@ void kern_main(struct boot_info *boot_info) {
     virtio_blk_init();
 
     blk_scan_partitions();
-    for (int i = 0; blk_at(i); i++) {
-        for (int round = 0; round < 2; round++) {
-            uint64_t t0 = time_mono();
-            for (uint64_t b = 0; b < 256; b++) {
-                struct buf *bf;
-                if (bread(blk_at(i), b, 4096, &bf) == 0) {
-                    brelse(bf);
-                }
-            }
-            printf("main: %s: 1 MiB read in %lu us, %lu KiB cached\n",
-                   blk_at(i)->name, (unsigned long)((time_mono() - t0) / 1000),
-                   (unsigned long)(blk_cache_bytes() / 1024));
+    struct fs *root = nullptr;
+    for (int i = 0; !root && blk_at(i); i++) {
+        struct blkdev *d  = blk_at(i);
+        int            ro = 1;
+        if ((root = ext2_mount(d, ro)) != nullptr) {
+            printf("main: root is ext2 on %s%s\n", d->name,
+                   ro ? " (read-only)" : "");
         }
     }
 
-    struct fs *root = nullptr;
-    if (bi.initrd_size) {
-        root = ramfs_create(phys_to_virt(bi.initrd_base), bi.initrd_size);
-        printf("main: root is the initrd, %lu bytes\n",
-               (unsigned long)bi.initrd_size);
-    } else {
-        printf("main: no disk to be the root\n");
+    if (!root) {
+        if (bi.initrd_size) {
+            root = ramfs_create(phys_to_virt(bi.initrd_base), bi.initrd_size);
+            printf("main: root is ramfs on initrd, %lu bytes\n",
+                   (unsigned long)bi.initrd_size);
+        } else {
+            printf("main: no disk to be the root\n");
+        }
     }
     if (!root || vfs_mount_root(root) != 0) {
         printf("main: cannot mount root filesystem\n");
