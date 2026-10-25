@@ -36,7 +36,7 @@ void kern_main(struct boot_info *boot_info) {
     struct fs *root = nullptr;
     for (int i = 0; !root && blk_at(i); i++) {
         struct blkdev *d  = blk_at(i);
-        int            ro = 1;
+        int            ro = !ext2_clean(d);
         if ((root = ext2_mount(d, ro)) != nullptr) {
             printf("main: root is ext2 on %s%s\n", d->name,
                    ro ? " (read-only)" : "");

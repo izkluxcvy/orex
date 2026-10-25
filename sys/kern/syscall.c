@@ -211,7 +211,37 @@ static long sys_getdents64(long fd, void *ubuf, long count) {
         used = -EFAULT;
     }
     kfree(out);
+    if (used > 0) {
+        vfs_accessed(f->vnode);
+    }
     return used;
+}
+
+static long sys_truncate(const char *upath, long size) {
+    struct vnode *vn;
+    long          err = at_vnode(AT_FDCWD, upath, 0, &vn);
+    if (err) {
+        return err;
+    }
+    if (S_ISDIR(vn->mode)) {
+        err = -EISDIR;
+    } else if ((err = vfs_permission(vn, W_OK, 0)) == 0) {
+        err = vfs_truncate(vn, size);
+    }
+    vnode_put(vn);
+    return err;
+}
+
+static long sys_ftruncate(long fd, long size) {
+    struct file *f = fd_get_io(fd);
+    if (!f) {
+        return -EBADF;
+    }
+    if (!f->vnode || !S_ISREG(f->vnode->mode) ||
+        (f->flags & O_ACCMODE) == O_RDONLY) {
+        return (f->flags & O_ACCMODE) == O_RDONLY ? -EBADF : -EINVAL;
+    }
+    return vfs_truncate(f->vnode, size);
 }
 
 static long sys_faccessat(long dirfd, const char *upath, long mode,
@@ -229,6 +259,60 @@ static long sys_faccessat(long dirfd, const char *upath, long mode,
                  ((flags & AT_EACCESS) ? 0 : VFS_REAL);
     err        = vfs_access(u.base, u.path, (int)mode, vflags);
     put_path(&u);
+    return err;
+}
+
+static long attr_at(long dirfd, const char *upath, long flags, int chmod,
+                    long a, long b) {
+    if (flags & ~(long)(AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH)) {
+        return -EINVAL;
+    }
+    struct vnode *vn;
+    long          err;
+    if (!upath) {
+        struct file *f = fd_get_io(dirfd);
+        if (!f) {
+            return -EBADF;
+        }
+        if (!f->vnode) {
+            return -EINVAL;
+        }
+        vn = vnode_ref(f->vnode);
+    } else if ((err = at_vnode(dirfd, upath, flags, &vn)) != 0) {
+        return err;
+    }
+    if (chmod && S_ISLNK(vn->mode)) {
+        err = -EOPNOTSUPP;
+    } else {
+        err = chmod ? vfs_chmod(vn, (uint32_t)a)
+                    : vfs_chown(vn, (uint32_t)a, (uint32_t)b);
+    }
+    vnode_put(vn);
+    return err;
+}
+
+static long sys_utimensat(long dirfd, const char *upath,
+                          const struct k_timespec *utimes, long flags) {
+    struct k_timespec ts[2];
+    if (flags & ~(long)AT_SYMLINK_NOFOLLOW) {
+        return -EINVAL;
+    }
+    if (utimes && copy_from_user(ts, utimes, sizeof(ts)) != 0) {
+        return -EFAULT;
+    }
+    struct vnode *vn;
+    long          err;
+    if (!upath) {
+        struct file *f = fd_get_io(dirfd);
+        if (!f || !f->vnode) {
+            return -EBADF;
+        }
+        vn = vnode_ref(f->vnode);
+    } else if ((err = at_vnode(dirfd, upath, flags, &vn)) != 0) {
+        return err;
+    }
+    err = vfs_utimes(vn, utimes ? ts : nullptr);
+    vnode_put(vn);
     return err;
 }
 
@@ -392,6 +476,14 @@ long syscall_dispatch(long nr, long a0, long a1, long a2, long a3, long a4,
         return sys_read(a0, (void *)a1, a2);
     case SYS_write:
         return sys_write(a0, (const void *)a1, a2);
+    case SYS_readv:
+        return sys_readv(a0, (const void *)a1, a2);
+    case SYS_writev:
+        return sys_writev(a0, (const void *)a1, a2);
+    case SYS_pread64:
+        return sys_pread64(a0, (void *)a1, a2, a3);
+    case SYS_pwrite64:
+        return sys_pwrite64(a0, (const void *)a1, a2, a3);
     case SYS_open:
         return sys_openat(AT_FDCWD, (const char *)a0, a1, a2);
     case SYS_openat:
@@ -415,8 +507,35 @@ long syscall_dispatch(long nr, long a0, long a1, long a2, long a3, long a4,
         return sys_faccessat(a0, (const char *)a1, a2, 0);
     case SYS_faccessat2:
         return sys_faccessat(a0, (const char *)a1, a2, a3);
+    case SYS_chmod:
+        return attr_at(AT_FDCWD, (const char *)a0, 0, 1, a1, 0);
+    case SYS_fchmod:
+        return attr_at(a0, nullptr, 0, 1, a1, 0);
+    case SYS_fchmodat:
+        return attr_at(a0, (const char *)a1, 0, 1, a2, 0);
+    case SYS_truncate:
+        return sys_truncate((const char *)a0, a1);
+    case SYS_ftruncate:
+        return sys_ftruncate(a0, a1);
+    case SYS_fchmodat2:
+        return attr_at(a0, (const char *)a1, a3, 1, a2, 0);
+    case SYS_chown:
+        return attr_at(AT_FDCWD, (const char *)a0, 0, 0, a1, a2);
+    case SYS_lchown:
+        return attr_at(AT_FDCWD, (const char *)a0, AT_SYMLINK_NOFOLLOW, 0, a1,
+                       a2);
+    case SYS_fchown:
+        return attr_at(a0, nullptr, 0, 0, a1, a2);
+    case SYS_fchownat:
+        return attr_at(a0, (const char *)a1, a4, 0, a2, a3);
+    case SYS_utimensat:
+        return sys_utimensat(a0, (const char *)a1,
+                             (const struct k_timespec *)a2, a3);
     case SYS_fcntl:
         return sys_fcntl(a0, a1, a2);
+    case SYS_fsync:
+    case SYS_fdatasync:
+        return sys_fsync(a0);
     case SYS_sync:
         return blk_sync(), 0;
     case SYS_umask:

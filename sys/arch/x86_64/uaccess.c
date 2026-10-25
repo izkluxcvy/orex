@@ -29,12 +29,18 @@ __asm__(".text\n"
 
 static int user_range(const void *uaddr, size_t n) {
     uintptr_t va = (uintptr_t)uaddr;
+    if (curthread->uaccess_kernel) {
+        return va + n >= va;
+    }
     return va >= USER_BASE && va < USER_TOP && n <= USER_TOP - va;
 }
 
 int uaccess_prepare(const void *uaddr, size_t n, int write) {
     if (!user_range(uaddr, n)) {
         return -EFAULT;
+    }
+    if (curthread->uaccess_kernel && (uintptr_t)uaddr >= USER_TOP) {
+        return 0;
     }
     uintptr_t    va = (uintptr_t)uaddr;
     struct proc *p  = curthread->proc;

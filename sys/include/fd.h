@@ -47,8 +47,13 @@ void fd_fork(struct proc *child, struct proc *parent);
 
 long sys_read(long fd, void *buf, long n);
 long sys_write(long fd, const void *buf, long n);
+long sys_readv(long fd, const void *uiov, long count);
+long sys_writev(long fd, const void *uiov, long count);
+long sys_pread64(long fd, void *buf, long n, long off);
+long sys_pwrite64(long fd, const void *buf, long n, long off);
 long sys_lseek(long fd, long offset, long whence);
 long sys_ioctl(long fd, long req, void *arg);
+long sys_fsync(long fd);
 long sys_close(long fd);
 long sys_dup(long fd);
 long sys_dup3(long fd, long nfd, long flags, int allow_same);

@@ -130,6 +130,168 @@ long sys_write(long fd, const void *buf, long n) {
     return ret;
 }
 
+#define IOV_MAX         1024
+#define PIPE_BUF_ATOMIC 512
+
+struct iovec {
+    void  *base;
+    size_t len;
+};
+
+static long iov_check(const struct iovec *uiov, long count, int write,
+                      size_t *total) {
+    if (count < 0 || count > IOV_MAX) {
+        return -EINVAL;
+    }
+    *total = 0;
+    for (long i = 0; i < count; i++) {
+        struct iovec v;
+        if (copy_from_user(&v, &uiov[i], sizeof(v)) != 0) {
+            return -EFAULT;
+        }
+        if (v.len > (size_t)INT64_MAX - *total) {
+            return -EINVAL;
+        }
+        if (uaccess_prepare(v.base, v.len, !write) != 0) {
+            return -EFAULT;
+        }
+        *total += v.len;
+    }
+    return 0;
+}
+
+long sys_readv(long fd, const void *uiov, long count) {
+    struct file *f = fd_get_io(fd);
+    if (!f || (f->flags & O_ACCMODE) == O_WRONLY) {
+        return -EBADF;
+    }
+    size_t total;
+    long   err = iov_check(uiov, count, 0, &total);
+    if (err) {
+        return err;
+    }
+    const struct iovec *iov  = uiov;
+    long                done = 0;
+    for (long i = 0; i < count; i++) {
+        struct iovec v;
+        if (copy_from_user(&v, &iov[i], sizeof(v)) != 0) {
+            return done ? done : -EFAULT;
+        }
+        long n = v.len ? f->ops->read(f, v.base, v.len) : 0;
+        if (n < 0) {
+            return done ? done : n;
+        }
+        done += n;
+        if ((size_t)n < v.len) {
+            break;
+        }
+    }
+    return done;
+}
+
+long sys_writev(long fd, const void *uiov, long count) {
+    struct file *f = fd_get_io(fd);
+    if (!f || (f->flags & O_ACCMODE) == O_RDONLY || !f->ops->write) {
+        return -EBADF;
+    }
+    size_t total;
+    long   err = iov_check(uiov, count, 1, &total);
+    if (err) {
+        return err;
+    }
+    const struct iovec *iov = uiov;
+    long                done;
+
+    if (total <= PIPE_BUF_ATOMIC) {
+        char   buf[PIPE_BUF_ATOMIC];
+        size_t at = 0;
+        for (long i = 0; i < count; i++) {
+            struct iovec v;
+            if (copy_from_user(&v, &iov[i], sizeof(v)) != 0 ||
+                v.len > total - at ||
+                copy_from_user(buf + at, v.base, v.len) != 0) {
+                return -EFAULT;
+            }
+            at += v.len;
+        }
+        curthread->uaccess_kernel = 1;
+        done                      = at ? f->ops->write(f, buf, at) : 0;
+        curthread->uaccess_kernel = 0;
+    } else {
+        done = 0;
+        for (long i = 0; i < count; i++) {
+            struct iovec v;
+            if (copy_from_user(&v, &iov[i], sizeof(v)) != 0) {
+                done = done ? done : -EFAULT;
+                break;
+            }
+            long n = v.len ? f->ops->write(f, v.base, v.len) : 0;
+            if (n < 0) {
+                done = done ? done : n;
+                break;
+            }
+            done += n;
+            if ((size_t)n < v.len) {
+                break;
+            }
+        }
+    }
+    if (done == -EPIPE) {
+        signal_send(curproc(), SIGPIPE);
+    }
+    return done;
+}
+
+static struct vnode *positional(struct file *f, long off, long *err) {
+    struct vnode *vn = f->vnode;
+    if (vn && S_ISDIR(vn->mode)) {
+        *err = -EISDIR;
+    } else if (!vn || !S_ISREG(vn->mode)) {
+        *err = -ESPIPE;
+    } else if (off < 0) {
+        *err = -EINVAL;
+    } else {
+        return vn;
+    }
+    return nullptr;
+}
+
+long sys_pread64(long fd, void *buf, long n, long off) {
+    struct file *f = fd_get_io(fd);
+    long         err;
+    if (!f || (f->flags & O_ACCMODE) == O_WRONLY) {
+        return -EBADF;
+    }
+    struct vnode *vn = positional(f, off, &err);
+    if (!vn) {
+        return err;
+    }
+    if (n < 0 || uaccess_prepare(buf, (size_t)n, 1) != 0) {
+        return -EFAULT;
+    }
+    long got = vnode_read_user(vn, buf, (size_t)n, (uint64_t)off);
+    if (got > 0) {
+        vfs_accessed(vn);
+    }
+    return got;
+}
+
+long sys_pwrite64(long fd, const void *buf, long n, long off) {
+    struct file *f = fd_get_io(fd);
+    long         err;
+    if (!f || (f->flags & O_ACCMODE) == O_RDONLY) {
+        return -EBADF;
+    }
+    struct vnode *vn = positional(f, off, &err);
+    if (!vn) {
+        return err;
+    }
+    if (n < 0 || uaccess_prepare(buf, (size_t)n, 0) != 0) {
+        return -EFAULT;
+    }
+    return vnode_write_user(vn, buf, (size_t)n, (uint64_t)off);
+}
+
 long sys_lseek(long fd, long offset, long whence) {
     struct file *f = fd_get_io(fd);
     return f ? vfs_lseek(f, offset, (int)whence) : -EBADF;
@@ -159,6 +321,14 @@ long sys_ioctl(long fd, long req, void *arg) {
         return 0;
     }
     return f->ops->ioctl ? f->ops->ioctl(f, (unsigned long)req, arg) : -ENOTTY;
+}
+
+long sys_fsync(long fd) {
+    struct file *f = fd_get_io(fd);
+    if (!f) {
+        return -EBADF;
+    }
+    return f->vnode ? vfs_fsync(f->vnode) : -EINVAL;
 }
 
 long sys_close(long fd) {

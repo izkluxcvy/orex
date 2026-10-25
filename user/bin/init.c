@@ -31,6 +31,24 @@ static void run(char **argv) {
         tcsetpgrp(0, getpid());
         signal(SIGINT, SIG_DFL);
         signal(22, SIG_DFL);
+
+        // redirect
+        for (int i = 0; argv[i]; i++) {
+            if ((strcmp(argv[i], ">") == 0 || strcmp(argv[i], ">>") == 0) &&
+                argv[i + 1]) {
+                int flags = O_WRONLY | (argv[i][1] ? O_APPEND : O_TRUNC);
+                int fd    = open(argv[i + 1], flags);
+                if (fd < 0) {
+                    puts(argv[i + 1]);
+                    puts(": cannot open\n");
+                    _exit(1);
+                }
+                dup2(fd, 1);
+                close(fd);
+                argv[i] = nullptr;
+                break;
+            }
+        }
         if (strcmp(argv[0], "as") == 0 && argv[1] && argv[2]) {
             int id = (int)strtol(argv[1], nullptr, 10);
             setgroups(0, nullptr);

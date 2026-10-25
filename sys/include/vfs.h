@@ -89,6 +89,10 @@ struct vnode_ops {
     long (*read)(struct vnode *vn, void *buf, size_t n, uint64_t off);
     int (*readdir)(struct vnode *dir, uint64_t *pos, struct vfs_dirent *out);
     long (*readlink)(struct vnode *vn, char *buf, size_t n);
+
+    long (*write)(struct vnode *vn, const void *buf, size_t n, uint64_t off);
+    int (*truncate)(struct vnode *vn, uint64_t size);
+    int (*setattr)(struct vnode *vn);
 };
 
 struct fs_ops {
@@ -148,7 +152,10 @@ int           vnode_get(struct fs *fs, uint64_t ino, struct vnode **out);
 struct vnode *vnode_ref(struct vnode *vn);
 void          vnode_put(struct vnode *vn);
 long          vnode_read(struct vnode *vn, void *buf, size_t n, uint64_t off);
+long vnode_write(struct vnode *vn, const void *buf, size_t n, uint64_t off);
 long vnode_read_user(struct vnode *vn, void *ubuf, size_t n, uint64_t off);
+long vnode_write_user(struct vnode *vn, const void *ubuf, size_t n,
+                      uint64_t off);
 
 int           vfs_mount_root(struct fs *fs);
 int           vfs_mount(const char *path, struct fs *fs);
@@ -163,11 +170,26 @@ int vfs_open(struct vnode *base, const char *path, int flags, uint32_t mode,
              struct file **out);
 int vfs_open_vnode(struct vnode *vn, int flags, struct file **out);
 int vfs_access(struct vnode *base, const char *path, int mask, int flags);
+int vfs_truncate(struct vnode *vn, int64_t size);
+int vfs_fsync(struct vnode *vn);
 
 int  vfs_chdir(struct vnode *dir);
 long vfs_getcwd(char *buf, size_t size);
 
 int vfs_permission(struct vnode *vn, int mask, int real);
+
+#define VFS_ATIME 1
+#define VFS_MTIME 2
+#define VFS_CTIME 4
+void vfs_touch(struct vnode *vn, int what, int sync);
+void vfs_accessed(struct vnode *vn);
+
+struct k_timespec;
+int vfs_utimes(struct vnode *vn, const struct k_timespec *ts);
+
+int vfs_chmod(struct vnode *vn, uint32_t mode);
+int vfs_chown(struct vnode *vn, uint32_t uid, uint32_t gid);
+
 int vfs_exec_open(const char *path, struct vnode **out);
 int vfs_exec_check(struct vnode *vn);
 

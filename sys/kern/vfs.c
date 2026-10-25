@@ -1,12 +1,15 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <blk.h>
 #include <cred.h>
 #include <errno.h>
 #include <kmalloc.h>
+#include <ktime.h>
 #include <memcpy.h>
 #include <memmove.h>
 #include <memset.h>
+#include <mutex.h>
 #include <proc.h>
 #include <spinlock.h>
 #include <uaccess.h>
@@ -153,6 +156,12 @@ void vnode_put(struct vnode *vn) {
     if (last) {
         release(vn);
     }
+}
+
+int vfs_fsync(struct vnode *vn) {
+    (void)vn;
+    int b = blk_sync();
+    return b;
 }
 
 // --- Permissions -------------------------------------------------------------
@@ -436,6 +445,13 @@ int vfs_mount(const char *path, struct fs *fs) {
     return 0;
 }
 
+long vnode_write(struct vnode *vn, const void *buf, size_t n, uint64_t off) {
+    if (n) {
+        vfs_touch(vn, VFS_MTIME | VFS_CTIME, 0);
+    }
+    return vn->fs->vops->write(vn, buf, n, off);
+}
+
 #define BOUNCE 4096
 
 long vnode_read_user(struct vnode *vn, void *ubuf, size_t n, uint64_t off) {
@@ -464,6 +480,34 @@ long vnode_read_user(struct vnode *vn, void *ubuf, size_t n, uint64_t off) {
     return done ? (long)done : err;
 }
 
+long vnode_write_user(struct vnode *vn, const void *ubuf, size_t n,
+                      uint64_t off) {
+    char *b = kmalloc(BOUNCE);
+    if (!b) {
+        return -ENOMEM;
+    }
+    size_t done = 0;
+    long   err  = 0;
+    while (done < n) {
+        size_t k = n - done < BOUNCE ? n - done : BOUNCE;
+        if (copy_from_user(b, (const char *)ubuf + done, k) != 0) {
+            err = -EFAULT;
+            break;
+        }
+        long put = vnode_write(vn, b, k, off + done);
+        if (put <= 0) {
+            err = put;
+            break;
+        }
+        done += (size_t)put;
+        if ((size_t)put < k) {
+            break;
+        }
+    }
+    kfree(b);
+    return done ? (long)done : err;
+}
+
 static long vnode_file_read(struct file *f, void *buf, size_t n) {
     struct vnode *vn = f->vnode;
     if (S_ISDIR(vn->mode)) {
@@ -472,25 +516,51 @@ static long vnode_file_read(struct file *f, void *buf, size_t n) {
     long got = vnode_read_user(vn, buf, n, (uint64_t)f->offset);
     if (got > 0) {
         f->offset += got;
+        vfs_accessed(vn);
     }
     return got;
+}
+
+static struct mutex append_lock;
+
+static long vnode_file_write(struct file *f, const void *buf, size_t n) {
+    struct vnode *vn     = f->vnode;
+    int           append = f->flags & O_APPEND;
+    if (append) {
+        mutex_lock(&append_lock);
+        f->offset = (long)vn->size;
+    }
+    long done = vnode_write_user(vn, buf, n, (uint64_t)f->offset);
+    if (done > 0) {
+        f->offset += done;
+    }
+    if (append) {
+        mutex_unlock(&append_lock);
+    }
+    return done;
 }
 
 static long vnode_file_size(struct file *f) { return (long)f->vnode->size; }
 
 static const struct file_ops vnode_file_ops = {
-    .read = vnode_file_read,
-    .size = vnode_file_size,
+    .read  = vnode_file_read,
+    .write = vnode_file_write,
+    .size  = vnode_file_size,
 };
 
 int vfs_open_vnode(struct vnode *vn, int flags, struct file **out) {
     int acc = flags & O_ACCMODE;
+    int err = 0;
     if (S_ISREG(vn->mode) || S_ISDIR(vn->mode)) {
         if (acc != O_RDONLY && S_ISDIR(vn->mode)) {
             return -EISDIR;
         }
-        if (acc != O_RDONLY) {
+        if (acc != O_RDONLY && !vn->fs->vops->write) {
             return -EROFS;
+        }
+        if ((flags & O_TRUNC) && acc != O_RDONLY && S_ISREG(vn->mode) &&
+            (err = vfs_truncate(vn, 0)) != 0) {
+            return err;
         }
         if (!(*out = file_new(&vnode_file_ops, flags, nullptr))) {
             return -ENOMEM;
@@ -603,10 +673,26 @@ int vfs_access(struct vnode *base, const char *path, int mask, int flags) {
     int real = (flags & VFS_REAL) != 0;
     err      = mask ? vfs_permission(vn, mask, real) : 0;
     if (!err && (mask & W_OK) &&
-        (S_ISREG(vn->mode) || S_ISDIR(vn->mode) || S_ISLNK(vn->mode))) {
+        (S_ISREG(vn->mode) || S_ISDIR(vn->mode) || S_ISLNK(vn->mode)) &&
+        !vn->fs->vops->write) {
         err = -EROFS;
     }
     vnode_put(vn);
+    return err;
+}
+
+int vfs_truncate(struct vnode *vn, int64_t size) {
+    if (S_ISDIR(vn->mode)) {
+        return -EISDIR;
+    }
+    if (!S_ISREG(vn->mode) || size < 0) {
+        return -EINVAL;
+    }
+    if (!vn->fs->vops->truncate) {
+        return -EROFS;
+    }
+    vfs_touch(vn, VFS_MTIME | VFS_CTIME, 0);
+    int err = vn->fs->vops->truncate(vn, (uint64_t)size);
     return err;
 }
 
@@ -691,6 +777,112 @@ long vfs_getcwd(char *buf, size_t size) {
     kfree(path);
     kfree(de);
     return err;
+}
+
+void vfs_touch(struct vnode *vn, int what, int sync) {
+    uint64_t now = (uint64_t)(time_real() / NSEC);
+    if (what & VFS_ATIME) {
+        vn->atime = now;
+    }
+    if (what & VFS_MTIME) {
+        vn->mtime = now;
+    }
+    if (what & VFS_CTIME) {
+        vn->ctime = now;
+    }
+    if (sync && vn->fs->vops->setattr) {
+        vn->fs->vops->setattr(vn);
+    }
+}
+
+void vfs_accessed(struct vnode *vn) {
+    uint64_t now = (uint64_t)(time_real() / NSEC);
+    if (vn->fs->vops->setattr &&
+        (vn->atime <= vn->mtime || vn->atime <= vn->ctime ||
+         now - vn->atime >= 24 * 3600)) {
+        vfs_touch(vn, VFS_ATIME, 1);
+    }
+}
+
+#define UTIME_NOW  ((1L << 30) - 1)
+#define UTIME_OMIT ((1L << 30) - 2)
+
+int vfs_utimes(struct vnode *vn, const struct k_timespec *ts) {
+    for (int i = 0; ts && i < 2; i++) {
+        if (ts[i].nsec != UTIME_NOW && ts[i].nsec != UTIME_OMIT &&
+            (ts[i].nsec < 0 || ts[i].nsec >= NSEC)) {
+            return -EINVAL;
+        }
+    }
+    int only_now = !ts || (ts[0].nsec == UTIME_NOW && ts[1].nsec == UTIME_NOW);
+    if (ts && ts[0].nsec == UTIME_OMIT && ts[1].nsec == UTIME_OMIT) {
+        return 0;
+    }
+    struct cred *c = &curproc()->cred;
+    if (c->euid != 0 && c->euid != vn->uid) {
+        if (!only_now) {
+            return -EPERM;
+        }
+        int err = vfs_permission(vn, W_OK, 0);
+        if (err) {
+            return err;
+        }
+    }
+    if (!vn->fs->vops->setattr) {
+        return -EROFS;
+    }
+    uint64_t  now      = (uint64_t)(time_real() / NSEC);
+    uint64_t *field[2] = {&vn->atime, &vn->mtime};
+    for (int i = 0; i < 2; i++) {
+        if (!ts || ts[i].nsec == UTIME_NOW) {
+            *field[i] = now;
+        } else if (ts[i].nsec != UTIME_OMIT) {
+            *field[i] = (uint64_t)ts[i].sec;
+        }
+    }
+    vn->ctime = now;
+    return vn->fs->vops->setattr(vn);
+}
+
+int vfs_chmod(struct vnode *vn, uint32_t mode) {
+    struct cred *c = &curproc()->cred;
+    if (c->euid != 0 && c->euid != vn->uid) {
+        return -EPERM;
+    }
+    if (!vn->fs->vops->setattr) {
+        return -EROFS;
+    }
+    mode &= 07777;
+    vfs_touch(vn, VFS_CTIME, 0);
+    if (c->euid != 0 && !cred_in_group(c, vn->gid, 0)) {
+        mode &= ~(uint32_t)S_ISGID;
+    }
+    vn->mode = (vn->mode & S_IFMT) | mode;
+    return vn->fs->vops->setattr(vn);
+}
+
+int vfs_chown(struct vnode *vn, uint32_t uid, uint32_t gid) {
+    struct cred *c = &curproc()->cred;
+    if (uid == (uint32_t)-1) {
+        uid = vn->uid;
+    }
+    if (gid == (uint32_t)-1) {
+        gid = vn->gid;
+    }
+    if (c->euid != 0 &&
+        (c->euid != vn->uid || (gid != vn->gid && !cred_in_group(c, gid, 0)))) {
+        return -EPERM;
+    }
+    if (!vn->fs->vops->setattr) {
+        return -EROFS;
+    }
+    if ((uid != vn->uid || gid != vn->gid) && !S_ISDIR(vn->mode)) {
+        vn->mode &= ~(uint32_t)(S_ISUID | S_ISGID);
+    }
+    vn->uid = uid;
+    vn->gid = gid;
+    vfs_touch(vn, VFS_CTIME, 0);
+    return vn->fs->vops->setattr(vn);
 }
 
 long vfs_lseek(struct file *f, long offset, int whence) {

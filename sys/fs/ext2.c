@@ -5,6 +5,7 @@
 #include <errno.h>
 #include <ext2.h>
 #include <kmalloc.h>
+#include <ktime.h>
 #include <memcmp.h>
 #include <memcpy.h>
 #include <memset.h>
@@ -18,7 +19,11 @@
 #define NDIRECT        12
 
 #define INCOMPAT_FILETYPE    0x0002
+#define RO_COMPAT_SPARSE     0x0001
 #define RO_COMPAT_LARGE_FILE 0x0002
+#define RO_COMPAT_BTREE_DIR  0x0004
+#define RO_COMPAT_WRITABLE                                                     \
+    (RO_COMPAT_SPARSE | RO_COMPAT_LARGE_FILE | RO_COMPAT_BTREE_DIR)
 
 static uint8_t dt_of_ft(uint8_t ft) {
     static const uint8_t dt[8] = {DT_UNKNOWN, DT_REG,  DT_DIR,  DT_CHR,
@@ -80,6 +85,7 @@ struct ext2_fs {
     uint32_t inode_size;
     uint32_t gdt_block;
     uint32_t groups;
+    int      can_write;
 };
 
 static struct ext2_fs *efs_of(struct vnode *vn) {
@@ -87,6 +93,10 @@ static struct ext2_fs *efs_of(struct vnode *vn) {
 }
 
 static struct ext2_inode *inode_of(struct vnode *vn) { return vn->priv; }
+
+static uint32_t sectors_per_block(struct ext2_fs *e) {
+    return e->block_size / 512;
+}
 
 // --- raw block access --------------------------------------------------------
 
@@ -102,9 +112,47 @@ static int read_bytes(struct ext2_fs *e, uint64_t block, uint32_t off,
     return 0;
 }
 
+static int write_bytes(struct ext2_fs *e, uint64_t block, uint32_t off,
+                       const void *src, size_t len) {
+    struct buf *b;
+    int         whole = off == 0 && len == e->block_size;
+    int         err   = whole ? bget(e->dev, block, e->block_size, &b)
+                              : bread(e->dev, block, e->block_size, &b);
+    if (err) {
+        return err;
+    }
+    if (src) {
+        memcpy(b->data + off, src, len);
+    } else {
+        memset(b->data + off, 0, len);
+    }
+    err = bwrite(b);
+    brelse(b);
+    return err;
+}
+
+static int sync_super(struct ext2_fs *e) {
+    struct buf *b;
+    int         err = bread(e->dev, SUPERBLOCK_OFF / 1024, 1024, &b);
+    if (err) {
+        return err;
+    }
+    memcpy(b->data, e->sb_raw, sizeof(e->sb_raw));
+    err = bwrite(b);
+    brelse(b);
+    return err;
+}
+
+static int sync_group(struct ext2_fs *e, uint32_t g) {
+    uint32_t off = g * sizeof(struct ext2_group);
+    return write_bytes(e, e->gdt_block + off / e->block_size,
+                       off % e->block_size, &e->gdt[g], sizeof(e->gdt[g]));
+}
+
 // --- inodes ------------------------------------------------------------------
 
-static int inode_read(struct ext2_fs *e, uint32_t ino, struct ext2_inode *ip) {
+static int inode_io(struct ext2_fs *e, uint32_t ino, struct ext2_inode *ip,
+                    int write) {
     uint32_t group = (ino - 1) / e->sb->inodes_per_group;
     uint32_t index = (ino - 1) % e->sb->inodes_per_group;
     if (ino == 0 || group >= e->groups) {
@@ -114,7 +162,8 @@ static int inode_read(struct ext2_fs *e, uint32_t ino, struct ext2_inode *ip) {
     uint64_t off   = (uint64_t)index * e->inode_size;
     uint64_t block = e->gdt[group].inode_table + off / e->block_size;
     uint32_t boff  = (uint32_t)(off % e->block_size);
-    return read_bytes(e, block, boff, ip, sizeof(*ip));
+    return write ? write_bytes(e, block, boff, ip, sizeof(*ip))
+                 : read_bytes(e, block, boff, ip, sizeof(*ip));
 }
 
 static uint64_t file_size(struct ext2_fs *e, struct ext2_inode *ip) {
@@ -126,15 +175,124 @@ static uint64_t file_size(struct ext2_fs *e, struct ext2_inode *ip) {
     return size;
 }
 
+static int sync_vnode(struct vnode *vn) {
+    struct ext2_fs    *e  = efs_of(vn);
+    struct ext2_inode *ip = inode_of(vn);
+
+    ip->size = (uint32_t)vn->size;
+    if (S_ISREG(vn->mode)) {
+        ip->size_high = (uint32_t)(vn->size >> 32);
+    }
+    ip->links_count = (uint16_t)vn->nlink;
+    ip->mode        = (uint16_t)vn->mode;
+    ip->uid         = (uint16_t)vn->uid;
+    ip->uid_high    = (uint16_t)(vn->uid >> 16);
+    ip->gid         = (uint16_t)vn->gid;
+    ip->gid_high    = (uint16_t)(vn->gid >> 16);
+    ip->atime       = (uint32_t)vn->atime;
+    ip->mtime       = (uint32_t)vn->mtime;
+    ip->ctime       = (uint32_t)vn->ctime;
+    return inode_io(e, vn->ino, ip, 1);
+}
+
+// --- allocation --------------------------------------------------------------
+
+static int bitmap_take(struct ext2_fs *e, uint32_t bitmap, uint32_t limit,
+                       uint32_t *bit) {
+    struct buf *b;
+    int         err = bread(e->dev, bitmap, e->block_size, &b);
+    if (err) {
+        return err;
+    }
+    err = -ENOSPC;
+    for (uint32_t i = 0; i < limit; i++) {
+        if (!(b->data[i / 8] & (1u << (i % 8)))) {
+            b->data[i / 8] |= (uint8_t)(1u << (i % 8));
+            *bit = i;
+            err  = bwrite(b);
+            break;
+        }
+    }
+    brelse(b);
+    return err;
+}
+
+static int bitmap_clear(struct ext2_fs *e, uint32_t bitmap, uint32_t bit) {
+    struct buf *b;
+    int         err = bread(e->dev, bitmap, e->block_size, &b);
+    if (err) {
+        return err;
+    }
+    b->data[bit / 8] &= (uint8_t)~(1u << (bit % 8));
+    err = bwrite(b);
+    brelse(b);
+    return err;
+}
+
+static int block_alloc(struct ext2_fs *e, struct ext2_inode *ip,
+                       uint32_t *out) {
+    uint32_t bpg = e->sb->blocks_per_group;
+
+    for (uint32_t g = 0; g < e->groups; g++) {
+        if (!e->gdt[g].free_blocks) {
+            continue;
+        }
+        uint32_t first = e->sb->first_data_block + g * bpg;
+        uint32_t limit = e->sb->blocks_count - first < bpg
+                             ? e->sb->blocks_count - first
+                             : bpg;
+        uint32_t bit;
+        int      err = bitmap_take(e, e->gdt[g].block_bitmap, limit, &bit);
+        if (err == -ENOSPC) {
+            continue;
+        }
+        if (err) {
+            return err;
+        }
+
+        e->gdt[g].free_blocks--;
+        e->sb->free_blocks_count--;
+        *out = first + bit;
+        ip->blocks += sectors_per_block(e);
+        if ((err = sync_group(e, g)) != 0 || (err = sync_super(e)) != 0) {
+            return err;
+        }
+        return write_bytes(e, *out, 0, nullptr, e->block_size);
+    }
+    return -ENOSPC;
+}
+
+static int block_free(struct ext2_fs *e, struct ext2_inode *ip,
+                      uint32_t block) {
+    bforget(e->dev, block, e->block_size);
+    uint32_t rel = block - e->sb->first_data_block;
+    uint32_t g   = rel / e->sb->blocks_per_group;
+    int      err =
+        bitmap_clear(e, e->gdt[g].block_bitmap, rel % e->sb->blocks_per_group);
+    if (err) {
+        return err;
+    }
+    e->gdt[g].free_blocks++;
+    e->sb->free_blocks_count++;
+    ip->blocks -= sectors_per_block(e);
+    if ((err = sync_group(e, g)) != 0) {
+        return err;
+    }
+    return sync_super(e);
+}
+
 // --- block mapping -----------------------------------------------------------
 
 static int bmap(struct ext2_fs *e, struct ext2_inode *ip, uint64_t fblock,
                 int alloc, uint32_t *out) {
     uint32_t per = e->block_size / 4;
     int      err;
-    (void)alloc;
 
     if (fblock < NDIRECT) {
+        if (!ip->block[fblock] && alloc &&
+            (err = block_alloc(e, ip, &ip->block[fblock])) != 0) {
+            return err;
+        }
         *out = ip->block[fblock];
         return 0;
     }
@@ -150,8 +308,11 @@ static int bmap(struct ext2_fs *e, struct ext2_inode *ip, uint64_t fblock,
         return -EFBIG;
     }
 
-    uint32_t *slot  = &ip->block[NDIRECT + level - 1];
-    uint32_t  block = *slot;
+    uint32_t *slot = &ip->block[NDIRECT + level - 1];
+    if (!*slot && alloc && (err = block_alloc(e, ip, slot)) != 0) {
+        return err;
+    }
+    uint32_t block = *slot;
 
     for (; level > 0 && block; level--) {
         span /= per;
@@ -161,6 +322,12 @@ static int bmap(struct ext2_fs *e, struct ext2_inode *ip, uint64_t fblock,
         uint32_t next;
         if ((err = read_bytes(e, block, idx * 4, &next, 4)) != 0) {
             return err;
+        }
+        if (!next && alloc) {
+            if ((err = block_alloc(e, ip, &next)) != 0 ||
+                (err = write_bytes(e, block, idx * 4, &next, 4)) != 0) {
+                return err;
+            }
         }
         block = next;
     }
@@ -172,6 +339,99 @@ static int has_blocks(struct vnode *vn) {
     uint32_t t = vn->mode & S_IFMT;
     return t == S_IFREG || t == S_IFDIR ||
            (t == S_IFLNK && inode_of(vn)->blocks != 0);
+}
+
+static int free_tree(struct ext2_fs *e, struct ext2_inode *ip, uint32_t block,
+                     int level) {
+    if (!block) {
+        return 0;
+    }
+    if (level > 0) {
+        uint32_t *ptrs = kmalloc(e->block_size);
+        if (!ptrs) {
+            return -ENOMEM;
+        }
+        int err = read_bytes(e, block, 0, ptrs, e->block_size);
+        for (uint32_t i = 0; !err && i < e->block_size / 4; i++) {
+            err = free_tree(e, ip, ptrs[i], level - 1);
+        }
+        kfree(ptrs);
+        if (err) {
+            return err;
+        }
+    }
+    return block_free(e, ip, block);
+}
+
+static int trim_tree(struct ext2_fs *e, struct ext2_inode *ip, uint32_t *slot,
+                     int level, uint64_t base, uint64_t keep) {
+    if (!*slot) {
+        return 0;
+    }
+    if (base >= keep) {
+        int err = free_tree(e, ip, *slot, level);
+        *slot   = 0;
+        return err;
+    }
+    if (level == 0) {
+        return 0;
+    }
+    uint32_t per  = e->block_size / 4;
+    uint64_t span = 1;
+    for (int i = 1; i < level; i++) {
+        span *= per;
+    }
+    uint32_t *ptrs = kmalloc(e->block_size);
+    if (!ptrs) {
+        return -ENOMEM;
+    }
+    int err = read_bytes(e, *slot, 0, ptrs, e->block_size);
+    for (uint32_t i = 0; !err && i < per; i++) {
+        if (base + (i + 1) * span > keep) {
+            err = trim_tree(e, ip, &ptrs[i], level - 1, base + i * span, keep);
+        }
+    }
+    if (!err) {
+        err = write_bytes(e, *slot, 0, ptrs, e->block_size);
+    }
+    kfree(ptrs);
+    return err;
+}
+
+static int truncate_locked(struct vnode *vn, uint64_t size) {
+    struct ext2_fs    *e   = efs_of(vn);
+    struct ext2_inode *ip  = inode_of(vn);
+    int                err = 0;
+
+    if (!has_blocks(vn)) {
+        if (size == 0) {
+            memset(ip->block, 0, sizeof(ip->block));
+        }
+    } else if (size < vn->size) {
+        uint64_t keep = (size + e->block_size - 1) / e->block_size;
+        uint32_t per  = e->block_size / 4;
+        uint64_t base = NDIRECT;
+        uint64_t span = per;
+        for (int i = 0; i < NDIRECT && !err; i++) {
+            err = trim_tree(e, ip, &ip->block[i], 0, (uint64_t)i, keep);
+        }
+        for (int level = 1; level <= 3 && !err; level++) {
+            err = trim_tree(e, ip, &ip->block[NDIRECT + level - 1], level, base,
+                            keep);
+            base += span;
+            span *= per;
+        }
+        uint32_t tail  = (uint32_t)(size % e->block_size);
+        uint32_t block = 0;
+        if (!err && tail &&
+            (err = bmap(e, ip, size / e->block_size, 0, &block)) == 0 &&
+            block) {
+            err = write_bytes(e, block, tail, nullptr, e->block_size - tail);
+        }
+    }
+    vn->size = size;
+    int serr = sync_vnode(vn);
+    return err ? err : serr;
 }
 
 // --- file data ---------------------------------------------------------------
@@ -210,6 +470,50 @@ static long read_locked(struct vnode *vn, void *buf, size_t n, uint64_t off) {
         done += chunk;
     }
     return (long)done;
+}
+
+static long write_locked(struct vnode *vn, const void *buf, size_t n,
+                         uint64_t off) {
+    struct ext2_fs    *e  = efs_of(vn);
+    struct ext2_inode *ip = inode_of(vn);
+    const uint8_t     *in = buf;
+
+    uint64_t max = (e->sb->feature_ro_compat & RO_COMPAT_LARGE_FILE)
+                       ? (uint64_t)1 << 40
+                       : 0x7fff'ffffULL;
+    if (off >= max) {
+        return -EFBIG;
+    }
+    if (n > max - off) {
+        n = max - off;
+    }
+
+    size_t done = 0;
+    int    err  = 0;
+    while (done < n) {
+        uint64_t fblock = (off + done) / e->block_size;
+        uint32_t boff   = (uint32_t)((off + done) % e->block_size);
+        size_t   chunk  = e->block_size - boff;
+        if (chunk > n - done) {
+            chunk = n - done;
+        }
+
+        uint32_t block;
+        if ((err = bmap(e, ip, fblock, 1, &block)) != 0 ||
+            (err = write_bytes(e, block, boff, in + done, chunk)) != 0) {
+            break;
+        }
+        done += chunk;
+        if (off + done > vn->size) {
+            vn->size = off + done;
+        }
+    }
+
+    int serr = sync_vnode(vn);
+    if (done) {
+        return (long)done;
+    }
+    return err ? err : serr;
 }
 
 // --- directories -------------------------------------------------------------
@@ -318,6 +622,29 @@ static int ext2_lookup(struct vnode *dir, const char *name, size_t len,
     return err;
 }
 
+static long ext2_write(struct vnode *vn, const void *buf, size_t n,
+                       uint64_t off) {
+    struct ext2_fs *e = efs_of(vn);
+    mutex_lock(&e->lock);
+    long done = write_locked(vn, buf, n, off);
+    mutex_unlock(&e->lock);
+    return done;
+}
+
+static int ext2_truncate(struct vnode *vn, uint64_t size) {
+    struct ext2_fs *e   = efs_of(vn);
+    uint64_t        max = (e->sb->feature_ro_compat & RO_COMPAT_LARGE_FILE)
+                              ? (uint64_t)1 << 40
+                              : 0x7fff'ffffULL;
+    if (size > max) {
+        return -EFBIG;
+    }
+    mutex_lock(&e->lock);
+    int err = truncate_locked(vn, size);
+    mutex_unlock(&e->lock);
+    return err;
+}
+
 static uint64_t get_rdev(const struct ext2_inode *ip) {
     if (ip->block[0]) {
         return ip->block[0] & 0xffff;
@@ -327,6 +654,14 @@ static uint64_t get_rdev(const struct ext2_inode *ip) {
            ((v & 0xff) | ((v >> 12) & ~0xffu));
 }
 
+static int ext2_setattr(struct vnode *vn) {
+    struct ext2_fs *e = efs_of(vn);
+    mutex_lock(&e->lock);
+    int err = sync_vnode(vn);
+    mutex_unlock(&e->lock);
+    return err;
+}
+
 static int ext2_vget(struct fs *fs, uint64_t ino, struct vnode *vn) {
     struct ext2_fs    *e  = (struct ext2_fs *)fs;
     struct ext2_inode *ip = kmalloc(sizeof(*ip));
@@ -334,7 +669,7 @@ static int ext2_vget(struct fs *fs, uint64_t ino, struct vnode *vn) {
         return -ENOMEM;
     }
     mutex_lock(&e->lock);
-    int err = inode_read(e, (uint32_t)ino, ip);
+    int err = inode_io(e, (uint32_t)ino, ip, 0);
     mutex_unlock(&e->lock);
     if (err) {
         kfree(ip);
@@ -361,12 +696,33 @@ static void ext2_vput(struct vnode *vn) {
     kfree(ip);
 }
 
+static const struct vnode_ops ext2_vops_rw = {
+    .lookup   = ext2_lookup,
+    .read     = ext2_read,
+    .readdir  = ext2_readdir,
+    .readlink = ext2_readlink,
+    .write    = ext2_write,
+    .truncate = ext2_truncate,
+    .setattr  = ext2_setattr,
+};
+
 static const struct vnode_ops ext2_vops_ro = {
     .lookup   = ext2_lookup,
     .read     = ext2_read,
     .readdir  = ext2_readdir,
     .readlink = ext2_readlink,
 };
+
+static void mark_mounted(struct ext2_fs *e) {
+    struct ext2_super *sb = e->sb;
+    if (!(sb->state & STATE_VALID) || (sb->state & STATE_ERROR)) {
+        printf("ext2: %s: not cleanly unmounted\n", e->dev->name);
+    }
+    sb->state &= ~STATE_VALID;
+    sb->mnt_count++;
+    sb->mtime = (uint32_t)(time_real() / NSEC);
+    sync_super(e);
+}
 
 static const struct fs_ops ext2_ops = {.vget = ext2_vget, .vput = ext2_vput};
 
@@ -457,16 +813,21 @@ struct fs *ext2_mount(struct blkdev *dev, int ro) {
         }
     }
 
-    int writable = 0;
-    (void)ro;
-    e->fs = (struct fs){.ops      = &ext2_ops,
-                        .vops     = &ext2_vops_ro,
-                        .name     = "ext2",
-                        .root_ino = EXT2_ROOT_INO,
-                        .blk      = dev};
+    e->can_write = !(sb->feature_ro_compat & ~RO_COMPAT_WRITABLE);
+    int writable = e->can_write && !ro;
+    e->fs        = (struct fs){
+        .ops      = &ext2_ops,
+        .vops     = writable ? &ext2_vops_rw : &ext2_vops_ro,
+        .name     = "ext2",
+        .root_ino = EXT2_ROOT_INO,
+        .blk      = dev,
+    };
 
     printf("ext2: %s: %lu blocks of %lu bytes, %lu groups, %s\n", dev->name,
            (unsigned long)sb->blocks_count, (unsigned long)e->block_size,
            (unsigned long)e->groups, writable ? "read-write" : "read-only");
+    if (writable) {
+        mark_mounted(e);
+    }
     return &e->fs;
 }

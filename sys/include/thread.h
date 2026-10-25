@@ -57,6 +57,7 @@ struct thread {
     struct waitq      sig_wait;
     struct file      *borrowed[THREAD_BORROW_MAX];
     int               nborrowed;
+    int               uaccess_kernel;
     struct pmap      *pmap;
     void             *frame;
     long              syscall_nr;
