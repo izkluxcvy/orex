@@ -17,11 +17,13 @@
 #define PIPE_BUF  512
 
 struct pipe {
-    char         buf[PIPE_SIZE];
-    size_t       head, len;
-    struct mutex rlock, wlock;
-    int          readers, writers;
-    struct waitq can_read, can_write;
+    char          buf[PIPE_SIZE];
+    size_t        head, len;
+    struct mutex  rlock, wlock;
+    int           readers, writers;
+    unsigned      reader_opens, writer_opens;
+    struct waitq  can_read, can_write;
+    struct vnode *fifo;
 };
 
 static int is_reader(struct file *f) {
@@ -185,6 +187,9 @@ static void pipe_close(struct file *f) {
         wake(&p->can_read);
     }
     int last = (p->readers == 0 && p->writers == 0);
+    if (last && p->fifo) {
+        p->fifo->fifo = nullptr;
+    }
 
     spin_unlock_irqrestore(&sched_lock, flags);
     if (last) {
@@ -216,6 +221,7 @@ int pipe_create(struct file *out[2]) {
         return -ENOMEM;
     }
     p->readers = p->writers = 1;
+    p->reader_opens = p->writer_opens = 1;
 
     out[0] = file_new(&pipe_ops, O_RDONLY, p);
     out[1] = file_new(&pipe_ops, O_WRONLY, p);
@@ -225,5 +231,77 @@ int pipe_create(struct file *out[2]) {
         kfree(p);
         return -ENOMEM;
     }
+    return 0;
+}
+
+int fifo_open(struct vnode *vn, int flags, struct file **out) {
+    struct pipe *fresh = pipe_new();
+    struct file *f     = file_new(&pipe_ops, flags, nullptr);
+    if (!fresh || !f) {
+        kfree(fresh);
+        kfree(f);
+        return -ENOMEM;
+    }
+    int      acc = flags & O_ACCMODE;
+    int      err = 0;
+    uint64_t lf  = spin_lock_irqsave(&sched_lock);
+    if (!vn->fifo) {
+        vn->fifo    = fresh;
+        fresh->fifo = vn;
+        fresh       = nullptr;
+    }
+    struct pipe *p = vn->fifo;
+    if (acc == O_WRONLY && (flags & O_NONBLOCK) && !p->readers) {
+        err = -ENXIO;
+    } else {
+        f->data = p;
+        if (acc != O_WRONLY) {
+            p->readers++;
+            p->reader_opens++;
+            wake(&p->can_write);
+        }
+        if (acc != O_RDONLY) {
+            p->writers++;
+            p->writer_opens++;
+            wake(&p->can_read);
+        }
+        if (!(flags & O_NONBLOCK) && acc != O_RDWR) {
+            int           reading = acc == O_RDONLY;
+            unsigned     *opens = reading ? &p->writer_opens : &p->reader_opens;
+            int          *other = reading ? &p->writers : &p->readers;
+            struct waitq *wq    = reading ? &p->can_read : &p->can_write;
+            unsigned      seen  = *opens;
+            while (!*other && *opens == seen && !err) {
+                err = waitq_sleep_intr(wq) ? -ERESTARTSYS : 0;
+            }
+        }
+    }
+    int last = 0;
+    if (err && f->data) {
+        if (acc != O_WRONLY) {
+            p->readers--;
+        }
+        if (acc != O_RDONLY) {
+            p->writers--;
+        }
+        last = !p->readers && !p->writers;
+        if (last) {
+            vn->fifo = nullptr;
+        }
+    } else if (err && !p->readers && !p->writers) {
+        vn->fifo = nullptr;
+        last     = 1;
+    }
+    spin_unlock_irqrestore(&sched_lock, lf);
+    kfree(fresh);
+    if (err) {
+        if (last) {
+            kfree(p);
+        }
+        kfree(f);
+        return err;
+    }
+    f->vnode = vnode_ref(vn);
+    *out     = f;
     return 0;
 }

@@ -36,8 +36,9 @@ static void run(char **argv) {
         for (int i = 0; argv[i]; i++) {
             if ((strcmp(argv[i], ">") == 0 || strcmp(argv[i], ">>") == 0) &&
                 argv[i + 1]) {
-                int flags = O_WRONLY | (argv[i][1] ? O_APPEND : O_TRUNC);
-                int fd    = open(argv[i + 1], flags);
+                int flags =
+                    O_WRONLY | O_CREAT | (argv[i][1] ? O_APPEND : O_TRUNC);
+                int fd = open(argv[i + 1], flags, 0666);
                 if (fd < 0) {
                     puts(argv[i + 1]);
                     puts(": cannot open\n");

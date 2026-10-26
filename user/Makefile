@@ -22,7 +22,7 @@ ROOTFS_SIZE = 32M
 ROOTFS_BLOCK = 1024
 
 LIB_OBJS := lib/crt0.o lib/ulib.o
-PROGS := hello init cat id
+PROGS := hello init cat id ls fs
 
 ULIB_BINS := $(PROGS:%=$(ROOT)/bin/%)
 BINS := $(ULIB_BINS)

@@ -73,6 +73,7 @@
 
 #define DT_OF(mode) ((uint8_t)(((mode) & S_IFMT) >> 12))
 
+#define RENAME_NOREPLACE 1
 struct file;
 struct fs;
 struct vnode;
@@ -93,6 +94,22 @@ struct vnode_ops {
     long (*write)(struct vnode *vn, const void *buf, size_t n, uint64_t off);
     int (*truncate)(struct vnode *vn, uint64_t size);
     int (*setattr)(struct vnode *vn);
+    int (*create)(struct vnode *dir, const char *name, size_t len,
+                  uint32_t mode, uint64_t rdev, uint32_t uid, uint32_t gid,
+                  uint64_t *ino);
+    int (*mkdir)(struct vnode *dir, const char *name, size_t len, uint32_t mode,
+                 uint32_t uid, uint32_t gid);
+    int (*symlink)(struct vnode *dir, const char *name, size_t len,
+                   const char *target, size_t tlen, uint32_t uid, uint32_t gid);
+    int (*link)(struct vnode *dir, const char *name, size_t len,
+                struct vnode *vn);
+    int (*unlink)(struct vnode *dir, const char *name, size_t len,
+                  struct vnode *vn);
+    int (*rmdir)(struct vnode *dir, const char *name, size_t len,
+                 struct vnode *victim);
+    int (*rename)(struct vnode *odir, const char *oname, size_t olen,
+                  struct vnode *ndir, const char *nname, size_t nlen,
+                  struct vnode *moved, struct vnode *victim);
 };
 
 struct fs_ops {
@@ -131,6 +148,7 @@ struct file {
 };
 
 struct mount;
+struct pipe;
 
 struct vnode {
     struct fs    *fs;
@@ -145,6 +163,7 @@ struct vnode {
     int           refs;
     struct mount *covered_by;
     struct mount *root_of;
+    struct pipe  *fifo;
     struct vnode *next;
 };
 
@@ -164,14 +183,25 @@ struct vnode *vfs_root();
 #define VFS_FOLLOW 1
 #define VFS_REAL   2
 
-int vfs_lookup(struct vnode *base, const char *path, int flags,
-               struct vnode **out);
-int vfs_open(struct vnode *base, const char *path, int flags, uint32_t mode,
-             struct file **out);
-int vfs_open_vnode(struct vnode *vn, int flags, struct file **out);
-int vfs_access(struct vnode *base, const char *path, int mask, int flags);
-int vfs_truncate(struct vnode *vn, int64_t size);
-int vfs_fsync(struct vnode *vn);
+int  vfs_lookup(struct vnode *base, const char *path, int flags,
+                struct vnode **out);
+int  vfs_open(struct vnode *base, const char *path, int flags, uint32_t mode,
+              struct file **out);
+int  vfs_open_vnode(struct vnode *vn, int flags, struct file **out);
+int  vfs_mkdir(struct vnode *base, const char *path, uint32_t mode);
+int  vfs_mknod(struct vnode *base, const char *path, uint32_t mode,
+               uint64_t rdev);
+int  vfs_symlink(const char *target, struct vnode *base, const char *path);
+long vfs_readlink(struct vnode *base, const char *path, char *buf, size_t n);
+int  vfs_link(struct vnode *obase, const char *opath, struct vnode *nbase,
+              const char *npath, int flags);
+int  vfs_rename(struct vnode *obase, const char *opath, struct vnode *nbase,
+                const char *npath, int flags);
+int  vfs_unlink(struct vnode *base, const char *path);
+int  vfs_rmdir(struct vnode *base, const char *path);
+int  vfs_access(struct vnode *base, const char *path, int mask, int flags);
+int  vfs_truncate(struct vnode *vn, int64_t size);
+int  vfs_fsync(struct vnode *vn);
 
 int  vfs_chdir(struct vnode *dir);
 long vfs_getcwd(char *buf, size_t size);
@@ -222,3 +252,4 @@ struct file *file_ref(struct file *f);
 void         file_unref(struct file *f);
 
 int pipe_create(struct file *out[2]);
+int fifo_open(struct vnode *vn, int flags, struct file **out);

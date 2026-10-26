@@ -25,6 +25,21 @@
 #define RO_COMPAT_WRITABLE                                                     \
     (RO_COMPAT_SPARSE | RO_COMPAT_LARGE_FILE | RO_COMPAT_BTREE_DIR)
 
+#define INDEX_FL 0x1000
+
+#define FT_REG     1
+#define FT_DIR     2
+#define FT_SYMLINK 7
+
+#define FAST_SYMLINK_MAX 60
+#define DIR_LINK_MAX     32000
+
+static uint8_t ft_of(uint32_t mode) {
+    static const uint8_t ft[16] = {[1] = 5, [2] = 3,  [4] = 2, [6] = 4,
+                                   [8] = 1, [10] = 7, [12] = 6};
+    return ft[(mode >> 12) & 15];
+}
+
 static uint8_t dt_of_ft(uint8_t ft) {
     static const uint8_t dt[8] = {DT_UNKNOWN, DT_REG,  DT_DIR,  DT_CHR,
                                   DT_BLK,     DT_FIFO, DT_SOCK, DT_LNK};
@@ -281,6 +296,58 @@ static int block_free(struct ext2_fs *e, struct ext2_inode *ip,
     return sync_super(e);
 }
 
+static int inode_alloc(struct ext2_fs *e, int dir, uint32_t *ino) {
+    uint32_t ipg = e->sb->inodes_per_group;
+
+    for (uint32_t g = 0; g < e->groups; g++) {
+        if (!e->gdt[g].free_inodes) {
+            continue;
+        }
+        uint32_t bit;
+        int      err = bitmap_take(e, e->gdt[g].inode_bitmap, ipg, &bit);
+        if (err == -ENOSPC) {
+            continue;
+        }
+        if (err) {
+            return err;
+        }
+
+        e->gdt[g].free_inodes--;
+        e->sb->free_inodes_count--;
+        if (dir) {
+            e->gdt[g].used_dirs++;
+        }
+        *ino = g * ipg + bit + 1;
+        if ((err = sync_group(e, g)) != 0 || (err = sync_super(e)) != 0) {
+            return err;
+        }
+
+        uint64_t off = (uint64_t)bit * e->inode_size;
+        return write_bytes(e, e->gdt[g].inode_table + off / e->block_size,
+                           (uint32_t)(off % e->block_size), nullptr,
+                           e->inode_size);
+    }
+    return -ENOSPC;
+}
+
+static int inode_free(struct ext2_fs *e, uint32_t ino, int dir) {
+    uint32_t g   = (ino - 1) / e->sb->inodes_per_group;
+    int      err = bitmap_clear(e, e->gdt[g].inode_bitmap,
+                                (ino - 1) % e->sb->inodes_per_group);
+    if (err) {
+        return err;
+    }
+    e->gdt[g].free_inodes++;
+    e->sb->free_inodes_count++;
+    if (dir) {
+        e->gdt[g].used_dirs--;
+    }
+    if ((err = sync_group(e, g)) != 0) {
+        return err;
+    }
+    return sync_super(e);
+}
+
 // --- block mapping -----------------------------------------------------------
 
 static int bmap(struct ext2_fs *e, struct ext2_inode *ip, uint64_t fblock,
@@ -518,6 +585,10 @@ static long write_locked(struct vnode *vn, const void *buf, size_t n,
 
 // --- directories -------------------------------------------------------------
 
+static size_t dirent_len(size_t name_len) {
+    return (8 + name_len + 3) & ~(size_t)3;
+}
+
 static int next_dirent(struct vnode *dir, uint64_t *pos,
                        struct vfs_dirent *out) {
     struct ext2_fs *e = efs_of(dir);
@@ -576,6 +647,190 @@ static int lookup_locked(struct vnode *dir, const char *name, size_t len,
     }
     kfree(de);
     return err;
+}
+
+static int add_entry(struct vnode *dir, const char *name, size_t len,
+                     uint32_t ino, uint8_t type) {
+    struct ext2_fs    *e    = efs_of(dir);
+    struct ext2_inode *ip   = inode_of(dir);
+    size_t             need = dirent_len(len);
+    int                err;
+
+    ip->flags &= ~INDEX_FL;
+
+    uint64_t nblocks = dir->size / e->block_size;
+    for (uint64_t fb = 0; fb <= nblocks; fb++) {
+        int      grow = (fb == nblocks);
+        uint32_t block;
+        if ((err = bmap(e, ip, fb, grow, &block)) != 0) {
+            return err;
+        }
+        if (!block) {
+            continue;
+        }
+
+        struct buf *b;
+        if ((err = bread(e->dev, block, e->block_size, &b)) != 0) {
+            return err;
+        }
+
+        struct ext2_dirent *slot = nullptr;
+        if (grow) {
+            slot          = (struct ext2_dirent *)b->data;
+            slot->rec_len = (uint16_t)e->block_size;
+            dir->size += e->block_size;
+        }
+        for (uint32_t off = 0; !slot && off < e->block_size;) {
+            struct ext2_dirent *h = (struct ext2_dirent *)(b->data + off);
+            if (h->rec_len == 0) {
+                break;
+            }
+            size_t used = h->inode ? dirent_len(h->name_len) : 0;
+            if (h->rec_len - used >= need) {
+                if (used) {
+                    struct ext2_dirent *n =
+                        (struct ext2_dirent *)(b->data + off + used);
+                    n->rec_len = (uint16_t)(h->rec_len - used);
+                    h->rec_len = (uint16_t)used;
+                    h          = n;
+                }
+                slot = h;
+            }
+            off += h->rec_len;
+        }
+
+        if (slot) {
+            slot->inode     = ino;
+            slot->name_len  = (uint8_t)len;
+            slot->file_type = type;
+            memcpy(slot->name, name, len);
+            err = bwrite(b);
+            brelse(b);
+            int serr = sync_vnode(dir);
+            return err ? err : serr;
+        }
+        brelse(b);
+    }
+    return -ENOSPC;
+}
+
+static int remove_entry(struct vnode *dir, const char *name, size_t len) {
+    struct ext2_fs    *e  = efs_of(dir);
+    struct ext2_inode *ip = inode_of(dir);
+
+    ip->flags &= ~INDEX_FL;
+
+    for (uint64_t fb = 0; fb < dir->size / e->block_size; fb++) {
+        uint32_t block;
+        int      err = bmap(e, ip, fb, 0, &block);
+        if (err) {
+            return err;
+        }
+        if (!block) {
+            continue;
+        }
+        struct buf *b;
+        if ((err = bread(e->dev, block, e->block_size, &b)) != 0) {
+            return err;
+        }
+
+        struct ext2_dirent *prev = nullptr;
+        for (uint32_t off = 0; off < e->block_size;) {
+            struct ext2_dirent *h = (struct ext2_dirent *)(b->data + off);
+            if (h->rec_len == 0) {
+                break;
+            }
+            if (h->inode && h->name_len == len &&
+                memcmp(h->name, name, len) == 0) {
+                if (prev) {
+                    prev->rec_len += h->rec_len;
+                } else {
+                    h->inode = 0;
+                }
+                err = bwrite(b);
+                brelse(b);
+                int serr = sync_vnode(dir);
+                return err ? err : serr;
+            }
+            prev = h;
+            off += h->rec_len;
+        }
+        brelse(b);
+    }
+    return -ENOENT;
+}
+
+static int retarget_entry(struct vnode *dir, const char *name, size_t len,
+                          uint32_t ino, uint8_t type) {
+    struct ext2_fs    *e  = efs_of(dir);
+    struct ext2_inode *ip = inode_of(dir);
+
+    for (uint64_t fb = 0; fb < dir->size / e->block_size; fb++) {
+        uint32_t block;
+        int      err = bmap(e, ip, fb, 0, &block);
+        if (err) {
+            return err;
+        }
+        if (!block) {
+            continue;
+        }
+        struct buf *b;
+        if ((err = bread(e->dev, block, e->block_size, &b)) != 0) {
+            return err;
+        }
+        for (uint32_t off = 0; off < e->block_size;) {
+            struct ext2_dirent *h = (struct ext2_dirent *)(b->data + off);
+            if (h->rec_len == 0) {
+                break;
+            }
+            if (h->inode && h->name_len == len &&
+                memcmp(h->name, name, len) == 0) {
+                h->inode     = ino;
+                h->file_type = type;
+                err          = bwrite(b);
+                brelse(b);
+                return err;
+            }
+            off += h->rec_len;
+        }
+        brelse(b);
+    }
+    return -ENOENT;
+}
+
+static int dir_is_empty(struct vnode *dir) {
+    struct vfs_dirent *de = kmalloc(sizeof(*de));
+    if (!de) {
+        return -ENOMEM;
+    }
+    uint64_t pos   = 0;
+    int      got   = 0;
+    int      empty = 1;
+    while (empty && (got = next_dirent(dir, &pos, de)) > 0) {
+        empty =
+            de->name[0] == '.' && (de->name[1] == '\0' ||
+                                   (de->name[1] == '.' && de->name[2] == '\0'));
+    }
+    kfree(de);
+    return got < 0 ? got : empty;
+}
+
+static int make_inode(struct ext2_fs *e, uint32_t mode, uint16_t links,
+                      uint32_t uid, uint32_t gid, uint32_t *ino,
+                      struct ext2_inode *ip) {
+    int err = inode_alloc(e, S_ISDIR(mode), ino);
+    if (err) {
+        return err;
+    }
+    memset(ip, 0, sizeof(*ip));
+    ip->mode        = (uint16_t)mode;
+    ip->links_count = links;
+    ip->uid         = (uint16_t)uid;
+    ip->uid_high    = (uint16_t)(uid >> 16);
+    ip->gid         = (uint16_t)gid;
+    ip->gid_high    = (uint16_t)(gid >> 16);
+    ip->atime = ip->mtime = ip->ctime = (uint32_t)(time_real() / NSEC);
+    return 0;
 }
 
 // --- vnode ops ---------------------------------------------------------------
@@ -645,6 +900,16 @@ static int ext2_truncate(struct vnode *vn, uint64_t size) {
     return err;
 }
 
+static void set_rdev(struct ext2_inode *ip, uint64_t rdev) {
+    uint32_t major = (uint32_t)(rdev >> 8);
+    uint32_t minor = (uint32_t)(rdev & 0xff);
+    if (major < 256) {
+        ip->block[0] = major << 8 | minor;
+    } else {
+        ip->block[1] = (minor & 0xff) | (major << 8) | ((minor & ~0xffu) << 12);
+    }
+}
+
 static uint64_t get_rdev(const struct ext2_inode *ip) {
     if (ip->block[0]) {
         return ip->block[0] & 0xffff;
@@ -652,6 +917,207 @@ static uint64_t get_rdev(const struct ext2_inode *ip) {
     uint32_t v = ip->block[1];
     return (uint64_t)((v >> 8) & 0xfff) << 8 |
            ((v & 0xff) | ((v >> 12) & ~0xffu));
+}
+
+static int new_entry(struct vnode *dir, const char *name, size_t len,
+                     struct ext2_inode *ip, uint32_t ino, uint64_t *out) {
+    int err = inode_io(efs_of(dir), ino, ip, 1);
+    if (!err) {
+        err = add_entry(dir, name, len, ino, ft_of(ip->mode));
+    }
+    if (!err && out) {
+        *out = ino;
+    }
+    return err;
+}
+
+static int ext2_create(struct vnode *dir, const char *name, size_t len,
+                       uint32_t mode, uint64_t rdev, uint32_t uid, uint32_t gid,
+                       uint64_t *out) {
+    struct ext2_fs   *e = efs_of(dir);
+    struct ext2_inode ip;
+    uint32_t          ino;
+    uint64_t          existing;
+
+    mutex_lock(&e->lock);
+    int err = lookup_locked(dir, name, len, &existing);
+    if (err == 0) {
+        err = -EEXIST;
+    } else if (err == -ENOENT &&
+               (err = make_inode(e, mode, 1, uid, gid, &ino, &ip)) == 0) {
+        if (S_ISCHR(mode) || (mode & S_IFMT) == S_IFBLK) {
+            set_rdev(&ip, rdev);
+        }
+        err = new_entry(dir, name, len, &ip, ino, out);
+    }
+    mutex_unlock(&e->lock);
+    return err;
+}
+
+static int ext2_symlink(struct vnode *dir, const char *name, size_t len,
+                        const char *target, size_t tlen, uint32_t uid,
+                        uint32_t gid) {
+    struct ext2_fs   *e = efs_of(dir);
+    struct ext2_inode ip;
+    uint32_t          ino;
+    uint64_t          existing;
+    if (tlen >= e->block_size) {
+        return -ENAMETOOLONG;
+    }
+
+    mutex_lock(&e->lock);
+    int err = lookup_locked(dir, name, len, &existing);
+    if (err == 0) {
+        err = -EEXIST;
+    } else if (err == -ENOENT && (err = make_inode(e, S_IFLNK | 0777, 1, uid,
+                                                   gid, &ino, &ip)) == 0) {
+        ip.size = (uint32_t)tlen;
+        if (tlen < FAST_SYMLINK_MAX) {
+            memcpy(ip.block, target, tlen);
+        } else {
+            err = write_bytes(e, ip.block[0], 0, target, tlen);
+        }
+        if (!err) {
+            err = new_entry(dir, name, len, &ip, ino, nullptr);
+        }
+    }
+    mutex_unlock(&e->lock);
+    return err;
+}
+
+static int ext2_link(struct vnode *dir, const char *name, size_t len,
+                     struct vnode *vn) {
+    struct ext2_fs *e = efs_of(dir);
+    uint64_t        existing;
+    mutex_lock(&e->lock);
+    int err = lookup_locked(dir, name, len, &existing);
+    if (err == 0) {
+        err = -EEXIST;
+    } else if (err == -ENOENT &&
+               (err = add_entry(dir, name, len, (uint32_t)vn->ino,
+                                ft_of(vn->mode))) == 0) {
+        vn->nlink++;
+        err = sync_vnode(vn);
+    }
+    mutex_unlock(&e->lock);
+    return err;
+}
+
+static int ext2_rename(struct vnode *odir, const char *oname, size_t olen,
+                       struct vnode *ndir, const char *nname, size_t nlen,
+                       struct vnode *moved, struct vnode *victim) {
+    struct ext2_fs *e      = efs_of(odir);
+    int             is_dir = S_ISDIR(moved->mode);
+    int             err    = 0;
+    mutex_lock(&e->lock);
+    if (victim && S_ISDIR(victim->mode)) {
+        err = dir_is_empty(victim);
+        err = err < 0 ? err : err ? 0 : -ENOTEMPTY;
+    }
+    if (!err && is_dir && odir != ndir && !victim &&
+        ndir->nlink >= DIR_LINK_MAX) {
+        err = -EMLINK;
+    }
+    if (!err) {
+        err = victim ? retarget_entry(ndir, nname, nlen, (uint32_t)moved->ino,
+                                      ft_of(moved->mode))
+                     : add_entry(ndir, nname, nlen, (uint32_t)moved->ino,
+                                 ft_of(moved->mode));
+    }
+    if (!err && victim) {
+        if (S_ISDIR(victim->mode)) {
+            victim->nlink = 0;
+            ndir->nlink--;
+        } else {
+            victim->nlink--;
+        }
+        err = sync_vnode(victim);
+    }
+    if (!err) {
+        err = remove_entry(odir, oname, olen);
+    }
+    if (!err && is_dir && odir != ndir) {
+        err = retarget_entry(moved, "..", 2, (uint32_t)ndir->ino, FT_DIR);
+        odir->nlink--;
+        ndir->nlink++;
+    }
+    if (!err) {
+        int e1 = sync_vnode(odir);
+        int e2 = sync_vnode(ndir);
+        int e3 = sync_vnode(moved);
+        err    = e1 ? e1 : e2 ? e2 : e3;
+    }
+    mutex_unlock(&e->lock);
+    return err;
+}
+
+static int ext2_mkdir(struct vnode *dir, const char *name, size_t len,
+                      uint32_t mode, uint32_t uid, uint32_t gid) {
+    struct ext2_fs   *e = efs_of(dir);
+    struct ext2_inode ip;
+    uint32_t          ino, block;
+    uint64_t          existing;
+
+    mutex_lock(&e->lock);
+    int err = lookup_locked(dir, name, len, &existing);
+    if (err == 0) {
+        err = -EEXIST;
+    } else if (err == -ENOENT && dir->nlink >= DIR_LINK_MAX) {
+        err = -EMLINK;
+    } else if (err == -ENOENT &&
+               (err = make_inode(e, mode, 2, uid, gid, &ino, &ip)) == 0 &&
+               (err = block_alloc(e, &ip, &block)) == 0) {
+        uint8_t             ents[24] = {0};
+        struct ext2_dirent *dot      = (struct ext2_dirent *)ents;
+        struct ext2_dirent *dotdot   = (struct ext2_dirent *)(ents + 12);
+        *dot                         = (struct ext2_dirent){ino, 12, 1, FT_DIR};
+        *dotdot                      = (struct ext2_dirent){
+            (uint32_t)dir->ino, (uint16_t)(e->block_size - 12), 2, FT_DIR};
+        dot->name[0]    = '.';
+        dotdot->name[0] = dotdot->name[1] = '.';
+
+        ip.block[0] = block;
+        ip.size     = e->block_size;
+        if ((err = write_bytes(e, block, 0, ents, sizeof(ents))) == 0 &&
+            (err = inode_io(e, ino, &ip, 1)) == 0 &&
+            (err = add_entry(dir, name, len, ino, FT_DIR)) == 0) {
+            dir->nlink++;
+            err = sync_vnode(dir);
+        }
+    }
+    mutex_unlock(&e->lock);
+    return err;
+}
+
+static int ext2_unlink(struct vnode *dir, const char *name, size_t len,
+                       struct vnode *victim) {
+    struct ext2_fs *e = efs_of(dir);
+    mutex_lock(&e->lock);
+    int err = remove_entry(dir, name, len);
+    if (!err) {
+        victim->nlink--;
+        err = sync_vnode(victim);
+    }
+    mutex_unlock(&e->lock);
+    return err;
+}
+
+static int ext2_rmdir(struct vnode *dir, const char *name, size_t len,
+                      struct vnode *victim) {
+    struct ext2_fs *e = efs_of(dir);
+    mutex_lock(&e->lock);
+    int err = dir_is_empty(victim);
+    if (err == 0) {
+        err = -ENOTEMPTY;
+    } else if (err > 0 && (err = remove_entry(dir, name, len)) == 0) {
+        victim->nlink = 0;
+        dir->nlink--;
+        if ((err = sync_vnode(victim)) == 0) {
+            err = sync_vnode(dir);
+        }
+    }
+    mutex_unlock(&e->lock);
+    return err;
 }
 
 static int ext2_setattr(struct vnode *vn) {
@@ -692,7 +1158,19 @@ static int ext2_vget(struct fs *fs, uint64_t ino, struct vnode *vn) {
 }
 
 static void ext2_vput(struct vnode *vn) {
+    struct ext2_fs    *e  = efs_of(vn);
     struct ext2_inode *ip = inode_of(vn);
+
+    if (vn->nlink == 0 && vn->fs->vops->write) {
+        mutex_lock(&e->lock);
+        truncate_locked(vn, 0);
+        ip->dtime = e->sb->wtime > e->sb->inodes_count
+                        ? e->sb->wtime
+                        : e->sb->inodes_count + 1;
+        inode_io(e, (uint32_t)vn->ino, ip, 1);
+        inode_free(e, (uint32_t)vn->ino, S_ISDIR(vn->mode));
+        mutex_unlock(&e->lock);
+    }
     kfree(ip);
 }
 
@@ -703,6 +1181,13 @@ static const struct vnode_ops ext2_vops_rw = {
     .readlink = ext2_readlink,
     .write    = ext2_write,
     .truncate = ext2_truncate,
+    .create   = ext2_create,
+    .mkdir    = ext2_mkdir,
+    .symlink  = ext2_symlink,
+    .link     = ext2_link,
+    .unlink   = ext2_unlink,
+    .rmdir    = ext2_rmdir,
+    .rename   = ext2_rename,
     .setattr  = ext2_setattr,
 };
 
@@ -756,6 +1241,8 @@ int ext2_clean(struct blkdev *dev) {
     const struct ext2_super *sb = (const struct ext2_super *)b->data;
     int ok = sb->magic == EXT2_MAGIC && (sb->state & STATE_VALID) &&
              !(sb->state & STATE_ERROR);
+    printf("ext2: sb->state = 0x%x, %s\n", sb->state,
+           ok ? "clean" : "not clean");
     brelse(b);
     return ok;
 }

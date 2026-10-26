@@ -31,6 +31,7 @@ static struct spinlock vnode_lock = {.name = "vnode"};
 static struct vnode *vnodes;
 static struct mount *root_mount;
 static uint32_t      next_dev = 1;
+static struct mutex  rename_lock;
 
 struct file *file_new(const struct file_ops *ops, int flags, void *data) {
     struct file *f = kmalloc(sizeof(*f));
@@ -184,6 +185,12 @@ int vfs_permission(struct vnode *vn, int mask, int real) {
         bits >>= 3;
     }
     return ((bits & (uint32_t)mask) == (uint32_t)mask) ? 0 : -EACCES;
+}
+
+static int sticky_ok(struct vnode *dir, struct vnode *vn) {
+    uid_t euid = curproc()->cred.euid;
+    return !(dir->mode & S_ISVTX) || euid == 0 || euid == dir->uid ||
+           euid == vn->uid;
 }
 
 static int is_dot(const char *name, size_t len) {
@@ -375,6 +382,15 @@ static int walk(struct vnode *base, const char *path, int flags,
     return err;
 }
 
+static void walk_done(struct walk *w) {
+    if (w->dir) {
+        vnode_put(w->dir);
+    }
+    if (w->vn) {
+        vnode_put(w->vn);
+    }
+}
+
 int vfs_lookup(struct vnode *base, const char *path, int flags,
                struct vnode **out) {
     struct walk w;
@@ -383,6 +399,25 @@ int vfs_lookup(struct vnode *base, const char *path, int flags,
         *out = w.vn;
     }
     return err;
+}
+
+static int walk_parent(struct vnode *base, const char *path, struct walk *w) {
+    int err = walk(base, path, W_PARENT, w);
+    if (!err && w->len) {
+        int e = child_of(w->dir, w->name, w->len, &w->vn);
+        if (e && e != -ENOENT) {
+            walk_done(w);
+            return e;
+        }
+    }
+    return err;
+}
+
+static int may_create(struct vnode *dir) {
+    if (dir->nlink == 0) {
+        return -ENOENT;
+    }
+    return vfs_permission(dir, W_OK | X_OK, 0);
 }
 
 static struct mount *mount_new(struct fs *fs) {
@@ -409,6 +444,7 @@ int vfs_mount_root(struct fs *fs) {
     if (!m) {
         return -ENOMEM;
     }
+    mutex_init(&rename_lock);
     root_mount = m;
     return 0;
 }
@@ -548,6 +584,31 @@ static const struct file_ops vnode_file_ops = {
     .size  = vnode_file_size,
 };
 
+static void new_owner(struct vnode *dir, uint32_t *uid, uint32_t *gid) {
+    struct cred *c = &curproc()->cred;
+    *uid           = c->euid;
+    *gid           = (dir->mode & S_ISGID) ? dir->gid : c->egid;
+}
+
+static int make_node(struct vnode *dir, const char *name, size_t len,
+                     uint32_t mode, uint64_t rdev, struct vnode **out) {
+    uint32_t uid, gid;
+    uint64_t ino;
+    new_owner(dir, &uid, &gid);
+    int err = may_create(dir);
+    if (!err) {
+        err = dir->fs->vops->create
+                  ? dir->fs->vops->create(dir, name, len, mode, rdev, uid, gid,
+                                          &ino)
+                  : -EROFS;
+    }
+    if (!err) {
+        vfs_touch(dir, VFS_MTIME | VFS_CTIME, 1);
+        err = out ? vnode_get(dir->fs, ino, out) : 0;
+    }
+    return err;
+}
+
 int vfs_open_vnode(struct vnode *vn, int flags, struct file **out) {
     int acc = flags & O_ACCMODE;
     int err = 0;
@@ -567,6 +628,9 @@ int vfs_open_vnode(struct vnode *vn, int flags, struct file **out) {
         }
         (*out)->vnode = vnode_ref(vn);
         return 0;
+    }
+    if (S_ISFIFO(vn->mode)) {
+        return fifo_open(vn, flags, out);
     }
     if (S_ISLNK(vn->mode)) {
         return -ELOOP;
@@ -594,6 +658,48 @@ static int open_path(struct vnode *base, const char *path, int flags,
     return err;
 }
 
+static int open_creat(struct vnode *base, const char *path, int flags,
+                      uint32_t mode, struct vnode **out, int *created,
+                      int depth) {
+    struct walk w;
+    int         err = walk_parent(base, path, &w);
+    if (err) {
+        return err;
+    }
+    if (!w.len || is_dot(w.name, w.len) || w.slash) {
+        err = -EISDIR;
+    } else if (!w.vn) {
+        err = make_node(w.dir, w.name, w.len,
+                        S_IFREG | (mode & 0777 & ~curproc()->umask), 0, out);
+        *created = !err;
+        if (err == -EEXIST && !(flags & O_EXCL)) {
+            walk_done(&w);
+            return open_creat(base, path, flags, mode, out, created, depth);
+        }
+    } else if (flags & O_EXCL) {
+        err = -EEXIST;
+    } else if (S_ISLNK(w.vn->mode) && (flags & O_NOFOLLOW)) {
+        err = -ELOOP;
+    } else if (S_ISLNK(w.vn->mode)) {
+        char *target = kmalloc(PATH_MAX);
+        long  n = !target                ? -ENOMEM
+                  : depth >= SYMLOOP_MAX ? -ELOOP
+                                         : read_link(w.vn, target, PATH_MAX);
+        if (n > 0) {
+            target[n] = '\0';
+            err =
+                open_creat(base, target, flags, mode, out, created, depth + 1);
+        } else {
+            err = n ? (int)n : -ENOENT;
+        }
+        kfree(target);
+    } else {
+        *out = vnode_ref(w.vn);
+    }
+    walk_done(&w);
+    return err;
+}
+
 int vfs_open(struct vnode *base, const char *path, int flags, uint32_t mode,
              struct file **out) {
     if (flags & O_PATH) {
@@ -603,11 +709,15 @@ int vfs_open(struct vnode *base, const char *path, int flags, uint32_t mode,
         return -EINVAL;
     }
     struct vnode *vn;
-    (void)mode;
-    int err =
-        vfs_lookup(base, path, (flags & O_NOFOLLOW) ? 0 : VFS_FOLLOW, &vn);
+    int           created = 0, err;
+    if (flags & O_CREAT) {
+        err = open_creat(base, path, flags, mode, &vn, &created, 0);
+    } else {
+        err =
+            vfs_lookup(base, path, (flags & O_NOFOLLOW) ? 0 : VFS_FOLLOW, &vn);
+    }
     if (err) {
-        return err == -ENOENT && (flags & O_CREAT) ? -EROFS : err;
+        return err;
     }
 
     int acc  = flags & O_ACCMODE;
@@ -619,13 +729,304 @@ int vfs_open(struct vnode *base, const char *path, int flags, uint32_t mode,
         err = -ELOOP;
     } else if ((flags & O_DIRECTORY) && !S_ISDIR(vn->mode)) {
         err = -ENOTDIR;
-    } else {
+    } else if (!created) {
         err = vfs_permission(vn, need, 0);
     }
     if (!err) {
-        err = vfs_open_vnode(vn, flags, out);
+        err = vfs_open_vnode(vn, flags & ~(created ? O_TRUNC : 0), out);
     }
     vnode_put(vn);
+    return err;
+}
+
+int vfs_mkdir(struct vnode *base, const char *path, uint32_t mode) {
+    struct walk w;
+    int         err = walk_parent(base, path, &w);
+    if (err) {
+        return err;
+    }
+    if (!w.len || w.vn) {
+        err = -EEXIST;
+    } else if ((err = may_create(w.dir)) == 0) {
+        uint32_t uid, gid;
+        new_owner(w.dir, &uid, &gid);
+        mode = (mode & 0777 & ~curproc()->umask) | (w.dir->mode & S_ISGID);
+        err = w.dir->fs->vops->mkdir
+                  ? w.dir->fs->vops->mkdir(w.dir, w.name, w.len, S_IFDIR | mode,
+                                           uid, gid)
+                  : -EROFS;
+        if (!err) {
+            vfs_touch(w.dir, VFS_MTIME | VFS_CTIME, 1);
+        }
+    }
+    walk_done(&w);
+    return err;
+}
+
+int vfs_mknod(struct vnode *base, const char *path, uint32_t mode,
+              uint64_t rdev) {
+    uint32_t type = mode & S_IFMT;
+    if (!type) {
+        type = S_IFREG;
+    }
+    if (type != S_IFREG && type != S_IFIFO && type != S_IFCHR &&
+        type != S_IFBLK && type != S_IFSOCK) {
+        return -EINVAL;
+    }
+    struct walk w;
+    int         err = walk_parent(base, path, &w);
+    if (err) {
+        return err;
+    }
+    if (!w.len || w.vn) {
+        err = -EEXIST;
+    } else if (w.slash) {
+        err = -ENOENT;
+    } else {
+        err = make_node(w.dir, w.name, w.len,
+                        type | (mode & 0777 & ~curproc()->umask),
+                        type == S_IFCHR || type == S_IFBLK ? rdev : 0, nullptr);
+    }
+    walk_done(&w);
+    return err;
+}
+
+int vfs_symlink(const char *target, struct vnode *base, const char *path) {
+    size_t tlen = strlen(target);
+    if (!tlen) {
+        return -ENOENT;
+    }
+    if (tlen >= PATH_MAX) {
+        return -ENAMETOOLONG;
+    }
+    struct walk w;
+    int         err = walk_parent(base, path, &w);
+    if (err) {
+        return err;
+    }
+    if (!w.len || w.vn) {
+        err = -EEXIST;
+    } else if (w.slash) {
+        err = -ENOENT;
+    } else if ((err = may_create(w.dir)) == 0) {
+        uint32_t uid, gid;
+        new_owner(w.dir, &uid, &gid);
+        err = w.dir->fs->vops->symlink
+                  ? w.dir->fs->vops->symlink(w.dir, w.name, w.len, target, tlen,
+                                             uid, gid)
+                  : -EROFS;
+        if (!err) {
+            vfs_touch(w.dir, VFS_MTIME | VFS_CTIME, 1);
+        }
+    }
+    walk_done(&w);
+    return err;
+}
+
+long vfs_readlink(struct vnode *base, const char *path, char *buf, size_t n) {
+    struct vnode *vn;
+    long          err = vfs_lookup(base, path, 0, &vn);
+    if (err) {
+        return err;
+    }
+    err = S_ISLNK(vn->mode) ? read_link(vn, buf, n) : -EINVAL;
+    if (err >= 0) {
+        vfs_accessed(vn);
+    }
+    vnode_put(vn);
+    return err;
+}
+
+#define LINK_MAX 65000
+
+int vfs_link(struct vnode *obase, const char *opath, struct vnode *nbase,
+             const char *npath, int flags) {
+    struct vnode *vn;
+    int           err = vfs_lookup(obase, opath, flags & VFS_FOLLOW, &vn);
+    if (err) {
+        return err;
+    }
+    struct walk w;
+    if ((err = walk_parent(nbase, npath, &w)) != 0) {
+        vnode_put(vn);
+        return err;
+    }
+    if (S_ISDIR(vn->mode)) {
+        err = -EPERM;
+    } else if (!w.len || w.vn) {
+        err = -EEXIST;
+    } else if (w.slash) {
+        err = -ENOENT;
+    } else if (w.dir->fs != vn->fs) {
+        err = -EXDEV;
+    } else if (vn->nlink >= LINK_MAX) {
+        err = -EMLINK;
+    } else if ((err = may_create(w.dir)) == 0) {
+        vfs_touch(vn, VFS_CTIME, 0);
+        err = w.dir->fs->vops->link
+                  ? w.dir->fs->vops->link(w.dir, w.name, w.len, vn)
+                  : -EROFS;
+        if (!err) {
+            vfs_touch(w.dir, VFS_MTIME | VFS_CTIME, 1);
+        }
+    }
+    walk_done(&w);
+    vnode_put(vn);
+    return err;
+}
+
+static int remove(struct vnode *base, const char *path, int want_dir) {
+    struct walk w;
+    int         err = walk_parent(base, path, &w);
+    if (err) {
+        return err;
+    }
+    struct vnode *dir = w.dir, *victim = w.vn;
+    if (!w.len) {
+        err = -EBUSY;
+    } else if (is_dot(w.name, w.len)) {
+        err = !want_dir ? -EISDIR : w.len == 1 ? -EINVAL : -ENOTEMPTY;
+    } else if (!victim) {
+        err = -ENOENT;
+    } else if ((err = vfs_permission(dir, W_OK | X_OK, 0)) != 0) {
+    } else if (victim->covered_by || victim->root_of) {
+        err = -EBUSY;
+    } else if (!sticky_ok(dir, victim)) {
+        err = -EPERM;
+    } else if (want_dir && !S_ISDIR(victim->mode)) {
+        err = -ENOTDIR;
+    } else if (!want_dir && S_ISDIR(victim->mode)) {
+        err = -EISDIR;
+    } else if (!want_dir && w.slash) {
+        err = -ENOTDIR;
+    } else {
+        int (*op)(struct vnode *, const char *, size_t, struct vnode *) =
+            want_dir ? dir->fs->vops->rmdir : dir->fs->vops->unlink;
+        vfs_touch(victim, VFS_CTIME, 0);
+        err = op ? op(dir, w.name, w.len, victim) : -EROFS;
+        if (!err) {
+            vfs_touch(dir, VFS_MTIME | VFS_CTIME, 1);
+        }
+    }
+    walk_done(&w);
+    return err;
+}
+
+int vfs_unlink(struct vnode *base, const char *path) {
+    return remove(base, path, 0);
+}
+int vfs_rmdir(struct vnode *base, const char *path) {
+    return remove(base, path, 1);
+}
+
+static int is_below(struct vnode *dir, struct vnode *vn) {
+    struct vnode *cur   = vnode_ref(dir);
+    int           below = 0;
+    while (!below) {
+        if (cur == vn) {
+            below = 1;
+            break;
+        }
+        if (cur->root_of || cur == root_mount->root) {
+            break;
+        }
+        struct vnode *up;
+        if (parent_of(cur, &up) != 0) {
+            break;
+        }
+        vnode_put(cur);
+        cur = up;
+    }
+    vnode_put(cur);
+    return below;
+}
+
+static int rename_checks(struct walk *o, struct walk *n, int flags) {
+    struct vnode *moved = o->vn, *victim = n->vn;
+    int           err;
+    if (!o->len || !n->len) {
+        return -EBUSY;
+    }
+    if (is_dot(o->name, o->len) || is_dot(n->name, n->len)) {
+        return -EINVAL;
+    }
+    if (!moved) {
+        return -ENOENT;
+    }
+    if (o->dir->fs != n->dir->fs) {
+        return -EXDEV;
+    }
+    if ((err = vfs_permission(o->dir, W_OK | X_OK, 0)) != 0 ||
+        (err = may_create(n->dir)) != 0) {
+        return err;
+    }
+    if (!sticky_ok(o->dir, moved) || (victim && !sticky_ok(n->dir, victim))) {
+        return -EPERM;
+    }
+    if (moved->covered_by || moved->root_of ||
+        (victim && (victim->covered_by || victim->root_of))) {
+        return -EBUSY;
+    }
+    int is_dir = S_ISDIR(moved->mode);
+    if ((o->slash || n->slash) && !is_dir) {
+        return -ENOTDIR;
+    }
+    if (victim && victim != moved) {
+        if (flags & RENAME_NOREPLACE) {
+            return -EEXIST;
+        }
+        if (is_dir && !S_ISDIR(victim->mode)) {
+            return -ENOTDIR;
+        }
+        if (!is_dir && S_ISDIR(victim->mode)) {
+            return -EISDIR;
+        }
+    }
+    if (is_dir && o->dir != n->dir) {
+        if (is_below(n->dir, moved)) {
+            return -EINVAL;
+        }
+        if ((err = vfs_permission(moved, W_OK, 0)) != 0) {
+            return err;
+        }
+    }
+    return 0;
+}
+
+int vfs_rename(struct vnode *obase, const char *opath, struct vnode *nbase,
+               const char *npath, int flags) {
+    if (flags & ~RENAME_NOREPLACE) {
+        return -EINVAL;
+    }
+    struct walk o, n;
+    int         err = walk_parent(obase, opath, &o);
+    if (err) {
+        return err;
+    }
+    if ((err = walk_parent(nbase, npath, &n)) != 0) {
+        walk_done(&o);
+        return err;
+    }
+    mutex_lock(&rename_lock);
+    err = rename_checks(&o, &n, flags);
+    if (!err && n.vn != o.vn) {
+        struct vnode *dir = n.dir;
+        vfs_touch(o.vn, VFS_CTIME, 0);
+        if (n.vn) {
+            vfs_touch(n.vn, VFS_CTIME, 0);
+        }
+        err = dir->fs->vops->rename
+                  ? dir->fs->vops->rename(o.dir, o.name, o.len, dir, n.name,
+                                          n.len, o.vn, n.vn)
+                  : -EROFS;
+        if (!err) {
+            vfs_touch(o.dir, VFS_MTIME | VFS_CTIME, 1);
+            vfs_touch(dir, VFS_MTIME | VFS_CTIME, 1);
+        }
+    }
+    mutex_unlock(&rename_lock);
+    walk_done(&n);
+    walk_done(&o);
     return err;
 }
 

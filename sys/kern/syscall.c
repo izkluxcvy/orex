@@ -19,6 +19,8 @@
 #include <vfs.h>
 #include <vm.h>
 
+#define AT_SYMLINK_FOLLOW 0x400
+
 struct upath {
     char         *path;
     struct vnode *base;
@@ -215,6 +217,120 @@ static long sys_getdents64(long fd, void *ubuf, long count) {
         vfs_accessed(f->vnode);
     }
     return used;
+}
+
+static long sys_mkdirat(long dirfd, const char *upath, long mode) {
+    struct upath u;
+    long         err = get_path(dirfd, upath, &u);
+    if (err) {
+        return err;
+    }
+    err = vfs_mkdir(u.base, u.path, (uint32_t)mode);
+    put_path(&u);
+    return err;
+}
+
+static uint64_t dev_decode(uint64_t dev) {
+    uint64_t major = ((dev >> 8) & 0xfff) | ((dev >> 32) & ~0xfffULL);
+    uint64_t minor = (dev & 0xff) | ((dev >> 12) & ~0xffULL);
+    return (major << 8) | minor;
+}
+
+static long sys_mknodat(long dirfd, const char *upath, long mode, long dev) {
+    struct upath u;
+    long         err = get_path(dirfd, upath, &u);
+    if (err) {
+        return err;
+    }
+    err = vfs_mknod(u.base, u.path, (uint32_t)mode, dev_decode((uint64_t)dev));
+    put_path(&u);
+    return err;
+}
+
+static long sys_unlinkat(long dirfd, const char *upath, long flags) {
+    if (flags & ~(long)AT_REMOVEDIR) {
+        return -EINVAL;
+    }
+    struct upath u;
+    long         err = get_path(dirfd, upath, &u);
+    if (err) {
+        return err;
+    }
+    err = (flags & AT_REMOVEDIR) ? vfs_rmdir(u.base, u.path)
+                                 : vfs_unlink(u.base, u.path);
+    put_path(&u);
+    return err;
+}
+
+static long sys_symlinkat(const char *utarget, long dirfd, const char *upath) {
+    struct upath t, u;
+    long         err = get_path(AT_FDCWD, utarget, &t);
+    if (err) {
+        return err;
+    }
+    if ((err = get_path(dirfd, upath, &u)) == 0) {
+        err = vfs_symlink(t.path, u.base, u.path);
+        put_path(&u);
+    }
+    put_path(&t);
+    return err;
+}
+
+static long sys_readlinkat(long dirfd, const char *upath, char *ubuf,
+                           long size) {
+    if (size <= 0) {
+        return -EINVAL;
+    }
+    struct upath u;
+    long         err = get_path(dirfd, upath, &u);
+    if (err) {
+        return err;
+    }
+    char *buf = kmalloc(PATH_MAX);
+    err       = buf ? vfs_readlink(u.base, u.path, buf, PATH_MAX) : -ENOMEM;
+    put_path(&u);
+    if (err > size) {
+        err = size;
+    }
+    if (err > 0 && copy_to_user(ubuf, buf, (size_t)err) != 0) {
+        err = -EFAULT;
+    }
+    kfree(buf);
+    return err;
+}
+
+static long sys_linkat(long odirfd, const char *uold, long ndirfd,
+                       const char *unew, long flags) {
+    if (flags & ~(long)AT_SYMLINK_NOFOLLOW) {
+        return -EINVAL;
+    }
+    struct upath o, n;
+    long         err = get_path(odirfd, uold, &o);
+    if (err) {
+        return err;
+    }
+    if ((err = get_path(ndirfd, unew, &n)) == 0) {
+        err = vfs_link(o.base, o.path, n.base, n.path,
+                       (flags & AT_SYMLINK_NOFOLLOW) ? VFS_FOLLOW : 0);
+        put_path(&n);
+    }
+    put_path(&o);
+    return err;
+}
+
+static long sys_renameat2(long odirfd, const char *uold, long ndirfd,
+                          const char *unew, long flags) {
+    struct upath o, n;
+    long         err = get_path(odirfd, uold, &o);
+    if (err) {
+        return err;
+    }
+    if ((err = get_path(ndirfd, unew, &n)) == 0) {
+        err = vfs_rename(o.base, o.path, n.base, n.path, (int)flags);
+        put_path(&n);
+    }
+    put_path(&o);
+    return err;
 }
 
 static long sys_truncate(const char *upath, long size) {
@@ -501,6 +617,16 @@ long syscall_dispatch(long nr, long a0, long a1, long a2, long a3, long a4,
         return sys_fstatat(a0, (const char *)a1, (struct stat *)a2, a3);
     case SYS_getdents64:
         return sys_getdents64(a0, (void *)a1, a2);
+    case SYS_mkdir:
+        return sys_mkdirat(AT_FDCWD, (const char *)a0, a1);
+    case SYS_mkdirat:
+        return sys_mkdirat(a0, (const char *)a1, a2);
+    case SYS_rmdir:
+        return sys_unlinkat(AT_FDCWD, (const char *)a0, AT_REMOVEDIR);
+    case SYS_unlink:
+        return sys_unlinkat(AT_FDCWD, (const char *)a0, 0);
+    case SYS_unlinkat:
+        return sys_unlinkat(a0, (const char *)a1, a2);
     case SYS_access:
         return sys_faccessat(AT_FDCWD, (const char *)a0, a1, 0);
     case SYS_faccessat:
@@ -513,6 +639,30 @@ long syscall_dispatch(long nr, long a0, long a1, long a2, long a3, long a4,
         return attr_at(a0, nullptr, 0, 1, a1, 0);
     case SYS_fchmodat:
         return attr_at(a0, (const char *)a1, 0, 1, a2, 0);
+    case SYS_mknod:
+        return sys_mknodat(AT_FDCWD, (const char *)a0, a1, a2);
+    case SYS_mknodat:
+        return sys_mknodat(a0, (const char *)a1, a2, a3);
+    case SYS_symlink:
+        return sys_symlinkat((const char *)a0, AT_FDCWD, (const char *)a1);
+    case SYS_symlinkat:
+        return sys_symlinkat((const char *)a0, a1, (const char *)a2);
+    case SYS_readlink:
+        return sys_readlinkat(AT_FDCWD, (const char *)a0, (char *)a1, a2);
+    case SYS_readlinkat:
+        return sys_readlinkat(a0, (const char *)a1, (char *)a2, a3);
+    case SYS_link:
+        return sys_linkat(AT_FDCWD, (const char *)a0, AT_FDCWD,
+                          (const char *)a1, 0);
+    case SYS_linkat:
+        return sys_linkat(a0, (const char *)a1, a2, (const char *)a3, a4);
+    case SYS_rename:
+        return sys_renameat2(AT_FDCWD, (const char *)a0, AT_FDCWD,
+                             (const char *)a1, 0);
+    case SYS_renameat:
+        return sys_renameat2(a0, (const char *)a1, a2, (const char *)a3, 0);
+    case SYS_renameat2:
+        return sys_renameat2(a0, (const char *)a1, a2, (const char *)a3, a4);
     case SYS_truncate:
         return sys_truncate((const char *)a0, a1);
     case SYS_ftruncate:
