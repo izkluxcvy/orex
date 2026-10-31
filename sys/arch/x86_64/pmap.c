@@ -109,10 +109,10 @@ uint64_t pmap_user_flags(int write, int exec) {
 void pmap_protect(struct pmap *pm, uintptr_t va, uint64_t flags) {
     uint64_t *pte = pte_lookup(pm->pml4, va);
     if (pte && (*pte & PMAP_PRESENT)) {
-        if (pmm_page_refs(*pte & PMAP_ADDR) > 1) {
+        if (!(*pte & PMAP_SHARED) && pmm_page_refs(*pte & PMAP_ADDR) > 1) {
             flags &= ~PMAP_WRITE;
         }
-        *pte = (*pte & PMAP_ADDR) | flags | PMAP_PRESENT;
+        *pte = (*pte & (PMAP_ADDR | PMAP_SHARED)) | flags | PMAP_PRESENT;
         invlpg(va);
     }
 }
@@ -296,7 +296,9 @@ static int walk_user(struct pmap *pm,
 
 static int free_leaf(uintptr_t va, uint64_t *pte, void *ctx) {
     (void)va, (void)ctx;
-    pmm_page_unref(*pte & PMAP_ADDR);
+    if (!(*pte & PMAP_SHARED)) {
+        pmm_page_unref(*pte & PMAP_ADDR);
+    }
     return 0;
 }
 
@@ -323,6 +325,10 @@ void pmap_activate(struct pmap *pm) {
 }
 
 static int copy_leaf(uintptr_t va, uint64_t *pte, void *ctx) {
+    if (*pte & PMAP_SHARED) {
+        return pmap_enter(ctx, va, *pte & PMAP_ADDR, *pte & ~PMAP_ADDR) ? -1
+                                                                        : 0;
+    }
     *pte &= ~PMAP_WRITE;
     if (pmap_enter(ctx, va, *pte & PMAP_ADDR, *pte & ~PMAP_ADDR) != 0) {
         return -1;

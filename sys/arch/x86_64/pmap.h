@@ -11,6 +11,7 @@
 #define PMAP_PWT     0x008ull // write-through
 #define PMAP_PCD     0x010ull // cache disable
 #define PMAP_HUGE    0x080ull
+#define PMAP_SHARED  0x200ull
 #define PMAP_ADDR    0x000F'FFFF'FFFF'F000ull
 #define PMAP_NX      (1ull << 63) // only once EFER.NXE is on
 

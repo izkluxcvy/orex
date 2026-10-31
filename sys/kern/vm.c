@@ -10,6 +10,7 @@
 #include <proc.h>
 #include <vfs.h>
 #include <vm.h>
+#include <vobj.h>
 
 #include "../mm/pmm.h"
 #include "pmap.h"
@@ -28,6 +29,10 @@ static uint64_t pte_flags(int prot) {
 }
 
 static void area_free(struct vm_area *a) {
+    if (a->obj) {
+        vobj_unlink(a->obj, a);
+        vobj_put(a->obj);
+    }
     if (a->vn) {
         vnode_put(a->vn);
     }
@@ -37,6 +42,10 @@ static void area_free(struct vm_area *a) {
 static void area_dup(struct vm_area *a) {
     if (a->vn) {
         vnode_ref(a->vn);
+    }
+    if (a->obj) {
+        vobj_ref(a->obj);
+        vobj_link(a->obj, a);
     }
 }
 
@@ -92,7 +101,7 @@ static struct vm_area *split(struct vm_area *a, uintptr_t at) {
 static void free_pages(struct vmspace *vm, uintptr_t start, uintptr_t end) {
     for (uintptr_t va = start; va < end; va += PAGE_SIZE) {
         uint64_t pte = pmap_remove(vm->pmap, va);
-        if (pte & PMAP_PRESENT) {
+        if ((pte & PMAP_PRESENT) && !(pte & PMAP_SHARED)) {
             pmm_page_unref(pte & PMAP_ADDR);
         }
     }
@@ -114,6 +123,11 @@ struct vmspace *vm_create() {
 }
 
 void vm_clear(struct vmspace *vm) {
+    for (struct vm_area *a = vm->areas; a; a = a->next) {
+        if (a->obj) {
+            vobj_unlink(a->obj, a);
+        }
+    }
     pmap_clear_user(vm->pmap);
     while (vm->areas) {
         struct vm_area *a = vm->areas;
@@ -138,6 +152,7 @@ static int copy_locked(struct vmspace *dst, struct vmspace *src) {
         }
         *b      = *a;
         b->next = nullptr;
+        b->vm   = dst;
         area_dup(b);
         *tail = b;
         tail  = &b->next;
@@ -157,7 +172,7 @@ int vm_copy(struct vmspace *dst, struct vmspace *src) {
 }
 
 static int mergeable(struct vm_area *a, int prot) {
-    return a && !a->vn && a->prot == prot;
+    return a && !a->vn && !a->obj && a->prot == prot;
 }
 
 int vm_map(struct vmspace *vm, uintptr_t start, uintptr_t end, int prot,
@@ -196,7 +211,36 @@ int vm_map(struct vmspace *vm, uintptr_t start, uintptr_t end, int prot,
                            .vn       = vn ? vnode_ref(vn) : nullptr,
                            .off      = off,
                            .file_end = file_end,
+                           .maxprot  = PROT_READ | PROT_WRITE | PROT_EXEC,
                            .next     = next};
+    *pp = a;
+    return 0;
+}
+
+static int map_shared(struct vmspace *vm, uintptr_t start, uintptr_t end,
+                      int prot, int maxprot, struct vnode *vn, struct vobj *obj,
+                      uint64_t off) {
+    if (!range_free(vm, start, end)) {
+        return -EINVAL;
+    }
+    struct vm_area *a = kmalloc(sizeof(*a));
+    if (!a) {
+        return -ENOMEM;
+    }
+    struct vm_area **pp = &vm->areas;
+    while (*pp && (*pp)->start < start) {
+        pp = &(*pp)->next;
+    }
+    *a = (struct vm_area){.start   = start,
+                          .end     = end,
+                          .prot    = prot,
+                          .vn      = vn ? vnode_ref(vn) : nullptr,
+                          .off     = off,
+                          .obj     = obj,
+                          .vm      = vm,
+                          .maxprot = maxprot,
+                          .next    = *pp};
+    vobj_link(obj, a);
     *pp = a;
     return 0;
 }
@@ -249,6 +293,11 @@ static int vm_protect(struct vmspace *vm, uintptr_t start, uintptr_t end,
         return -ENOMEM;
     }
 
+    for (struct vm_area *a = vm->areas; a && a->start < end; a = a->next) {
+        if (a->end > start && (prot & ~a->maxprot)) {
+            return -EACCES;
+        }
+    }
     struct vm_area **pp;
     int              err = carve(vm, start, end, &pp);
     if (err) {
@@ -277,8 +326,8 @@ static int fault_locked(struct vmspace *vm, uintptr_t va, int access) {
     if (pte & PMAP_PRESENT) {
         uintptr_t old = pte & PMAP_ADDR;
         // Copy on write
-        if (access == PROT_WRITE && !(pte & PMAP_WRITE) &&
-            pmm_page_refs(old) > 1) {
+        if (access == PROT_WRITE && ~(pte & PMAP_SHARED) &&
+            !(pte & PMAP_WRITE) && pmm_page_refs(old) > 1) {
             uintptr_t pa = pmm_alloc_page_dirty();
             if (!pa) {
                 return -ENOMEM;
@@ -293,6 +342,20 @@ static int fault_locked(struct vmspace *vm, uintptr_t va, int access) {
         }
         pmap_protect(vm->pmap, page, flags);
         return 0;
+    }
+
+    if (a->obj) {
+        uint64_t idx = (a->off + (page - a->start)) / PAGE_SIZE;
+        if (a->vn && idx * PAGE_SIZE >= a->vn->size) {
+            return -EIO;
+        }
+        uintptr_t pa;
+        int err = vobj_page(a->obj, idx, (a->prot & PROT_WRITE) != 0, &pa);
+        if (err) {
+            return err;
+        }
+        return pmap_enter(vm->pmap, page, pa, flags | PMAP_SHARED) ? -ENOMEM
+                                                                   : 0;
     }
 
     uintptr_t pa = pmm_alloc_page();
@@ -377,10 +440,8 @@ static long do_mmap(uintptr_t addr, size_t len, long prot, long flags, long fd,
     if (size < len || size > USER_TOP) {
         return -ENOMEM;
     }
-    struct vnode *vn = nullptr;
-    if (type == MAP_SHARED) {
-        return -ENODEV;
-    }
+    struct vnode *vn      = nullptr;
+    int           maxprot = PROT_READ | PROT_WRITE | PROT_EXEC;
     if (!(flags & MAP_ANONYMOUS)) {
         struct file *f = fd_get_io(fd);
         if (!f) {
@@ -393,6 +454,12 @@ static long do_mmap(uintptr_t addr, size_t len, long prot, long flags, long fd,
             return -EACCES;
         }
         vn = f->vnode;
+        if (type == MAP_SHARED && (f->flags & O_ACCMODE) != O_RDWR) {
+            maxprot &= ~PROT_WRITE;
+            if (prot & PROT_WRITE) {
+                return -EACCES;
+            }
+        }
     }
 
     if (flags & MAP_FIXED) {
@@ -408,9 +475,47 @@ static long do_mmap(uintptr_t addr, size_t len, long prot, long flags, long fd,
             return -ENOMEM;
         }
     }
+    if (type == MAP_SHARED) {
+        struct vobj *obj = vn ? vfs_vobj(vn) : vobj_new(nullptr);
+        if (!obj) {
+            return -ENOMEM;
+        }
+        int err = map_shared(vm, addr, addr + size, (int)prot, maxprot, vn, obj,
+                             (uint64_t)off);
+        if (err) {
+            vobj_put(obj);
+        }
+        return err ? err : (long)addr;
+    }
     int err = vm_map(vm, addr, addr + size, (int)prot, vn, (uint64_t)off,
                      addr + size);
     return err ? err : (long)addr;
+}
+
+static long do_msync(uintptr_t addr, size_t len, long flags) {
+    if ((addr & (PAGE_SIZE - 1)) || (flags & ~7L) ||
+        ((flags & MS_ASYNC) && (flags & MS_SYNC))) {
+        return -EINVAL;
+    }
+    struct vmspace *vm      = curproc()->vm;
+    uintptr_t       end     = addr + page_up(len);
+    uintptr_t       covered = addr;
+    for (struct vm_area *a = vm->areas; a && covered < end; a = a->next) {
+        if (a->end > covered && a->start <= covered) {
+            covered = a->end;
+        }
+    }
+    if (covered < end) {
+        return -ENOMEM;
+    }
+    int err = 0;
+    for (struct vm_area *a = vm->areas; a && a->start < end; a = a->next) {
+        if (a->end > addr && a->obj && a->obj->backing) {
+            int e = vobj_sync(a->obj);
+            err   = err ? err : e;
+        }
+    }
+    return err;
 }
 
 static long do_brk(uintptr_t addr) {
@@ -461,6 +566,14 @@ long sys_brk(uintptr_t addr) {
     struct vmspace *vm = curproc()->vm;
     mutex_lock(&vm->lock);
     long r = do_brk(addr);
+    mutex_unlock(&vm->lock);
+    return r;
+}
+
+long sys_msync(uintptr_t addr, size_t len, long flags) {
+    struct vmspace *vm = curproc()->vm;
+    mutex_lock(&vm->lock);
+    long r = do_msync(addr, len, flags);
     mutex_unlock(&vm->lock);
     return r;
 }

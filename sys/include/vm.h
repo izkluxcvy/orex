@@ -7,6 +7,7 @@
 
 struct pmap;
 struct vnode;
+struct vobj;
 
 #define PROT_NONE  0
 #define PROT_READ  1
@@ -18,6 +19,10 @@ struct vnode;
 #define MAP_FIXED     0x10
 #define MAP_ANONYMOUS 0x20
 
+#define MS_ASYNC      1
+#define MS_INVALIDATE 2
+#define MS_SYNC       4
+
 #define USER_STACK_MAX (8UL << 20)
 #define MMAP_GAP       (1UL << 20)
 
@@ -27,6 +32,10 @@ struct vm_area {
     struct vnode   *vn;
     uint64_t        off;
     uintptr_t       file_end;
+    struct vobj    *obj;
+    struct vmspace *vm;
+    struct vm_area *obj_next;
+    int             maxprot;
     struct vm_area *next;
 };
 
@@ -57,3 +66,4 @@ long sys_mmap(uintptr_t addr, size_t len, long prot, long flags, long fd,
 long sys_munmap(uintptr_t addr, size_t len);
 long sys_mprotect(uintptr_t addr, size_t len, long prot);
 long sys_brk(uintptr_t addr);
+long sys_msync(uintptr_t addr, size_t len, long flags);

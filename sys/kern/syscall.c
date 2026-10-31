@@ -726,6 +726,8 @@ long syscall_dispatch(long nr, long a0, long a1, long a2, long a3, long a4,
         return sys_getcwd((char *)a0, a1);
     case SYS_lseek:
         return sys_lseek(a0, a1, a2);
+    case SYS_msync:
+        return sys_msync((uintptr_t)a0, (size_t)a1, a2);
     case SYS_ioctl:
         return sys_ioctl(a0, a1, (void *)a2);
     case SYS_rt_sigaction:

@@ -14,6 +14,7 @@
 #include <spinlock.h>
 #include <uaccess.h>
 #include <vfs.h>
+#include <vobj.h>
 
 struct mount {
     struct fs    *fs;
@@ -140,6 +141,9 @@ static void vnodes_unlink(struct vnode *vn) {
 }
 
 static void release(struct vnode *vn) {
+    if (vn->vobj) {
+        vobj_put(vn->vobj);
+    }
     if (vn->fs->ops->vput) {
         vn->fs->ops->vput(vn);
     }
@@ -159,10 +163,43 @@ void vnode_put(struct vnode *vn) {
     }
 }
 
+struct vobj *vfs_vobj(struct vnode *vn) {
+    if (vn->fs->vops->vobj) {
+        return vn->fs->vops->vobj(vn);
+    }
+    uint64_t flags = spin_lock_irqsave(&vnode_lock);
+    if (vn->vobj) {
+        struct vobj *o = vobj_ref(vn->vobj);
+        spin_unlock_irqrestore(&vnode_lock, flags);
+        return o;
+    }
+    spin_unlock_irqrestore(&vnode_lock, flags);
+    struct vobj *fresh = vobj_new(vn);
+    if (!fresh) {
+        return nullptr;
+    }
+    flags = spin_lock_irqsave(&vnode_lock);
+    if (!vn->vobj) {
+        vn->vobj = fresh;
+        fresh    = nullptr;
+    }
+    struct vobj *o = vobj_ref(vn->vobj);
+    spin_unlock_irqrestore(&vnode_lock, flags);
+    if (fresh) {
+        vobj_put(fresh);
+    }
+    return o;
+}
+
+static struct vobj *cache_of(struct vnode *vn) {
+    return vn->vobj && vn->vobj->backing ? vn->vobj : nullptr;
+}
+
 int vfs_fsync(struct vnode *vn) {
-    (void)vn;
-    int b = blk_sync();
-    return b;
+    struct vobj *c   = cache_of(vn);
+    int          err = c ? vobj_sync(c) : 0;
+    int          b   = blk_sync();
+    return err ? err : b;
 }
 
 // --- Permissions -------------------------------------------------------------
@@ -500,6 +537,9 @@ long vnode_read_user(struct vnode *vn, void *ubuf, size_t n, uint64_t off) {
     while (done < n) {
         size_t k   = n - done < BOUNCE ? n - done : BOUNCE;
         long   got = vn->fs->vops->read(vn, b, k, off + done);
+        if (got > 0 && cache_of(vn)) {
+            vobj_overlay(vn->vobj, off + done, b, (size_t)got);
+        }
         if (got > 0 && copy_to_user((char *)ubuf + done, b, (size_t)got) != 0) {
             got = -EFAULT;
         }
@@ -531,6 +571,9 @@ long vnode_write_user(struct vnode *vn, const void *ubuf, size_t n,
             break;
         }
         long put = vnode_write(vn, b, k, off + done);
+        if (put > 0 && cache_of(vn)) {
+            vobj_update(vn->vobj, off + done, b, (size_t)put);
+        }
         if (put <= 0) {
             err = put;
             break;
@@ -1043,6 +1086,9 @@ long vnode_read(struct vnode *vn, void *buf, size_t n, uint64_t off) {
         }
         got += (size_t)r;
     }
+    if (got && cache_of(vn)) {
+        vobj_overlay(vn->vobj, off, buf, got);
+    }
     return (long)got;
 }
 
@@ -1094,6 +1140,9 @@ int vfs_truncate(struct vnode *vn, int64_t size) {
     }
     vfs_touch(vn, VFS_MTIME | VFS_CTIME, 0);
     int err = vn->fs->vops->truncate(vn, (uint64_t)size);
+    if (!err && cache_of(vn)) {
+        vobj_truncate(vn->vobj, (uint64_t)size);
+    }
     return err;
 }
 

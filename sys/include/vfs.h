@@ -110,6 +110,7 @@ struct vnode_ops {
     int (*rename)(struct vnode *odir, const char *oname, size_t olen,
                   struct vnode *ndir, const char *nname, size_t nlen,
                   struct vnode *moved, struct vnode *victim);
+    struct vobj *(*vobj)(struct vnode *vn);
 };
 
 struct fs_ops {
@@ -149,6 +150,7 @@ struct file {
 
 struct mount;
 struct pipe;
+struct vobj;
 
 struct vnode {
     struct fs    *fs;
@@ -164,6 +166,7 @@ struct vnode {
     struct mount *covered_by;
     struct mount *root_of;
     struct pipe  *fifo;
+    struct vobj  *vobj;
     struct vnode *next;
 };
 
@@ -202,6 +205,7 @@ int  vfs_rmdir(struct vnode *base, const char *path);
 int  vfs_access(struct vnode *base, const char *path, int mask, int flags);
 int  vfs_truncate(struct vnode *vn, int64_t size);
 int  vfs_fsync(struct vnode *vn);
+struct vobj *vfs_vobj(struct vnode *vn);
 
 int  vfs_chdir(struct vnode *dir);
 long vfs_getcwd(char *buf, size_t size);
