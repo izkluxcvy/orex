@@ -44,12 +44,13 @@ $(ULIB_BINS): $(ROOT)/bin/%: bin/%.o $(LIB_OBJS) user.ld
 $(TARGET): owners tools/mkcpio.py $(BINS) $(STATIC)
 	mkdir -p $(ROOT)
 	cp -r root/. $(ROOT)
-	mkdir -p $(ROOT)/dev
+	mkdir -p $(ROOT)/dev $(ROOT)/run $(ROOT)/tmp
 	find $(ROOT) -type d -exec chmod 0755 {} +
 	find $(ROOT) -type f -exec chmod 0644 {} +
 	chmod 0755 $(BINS)
 	cp $(ROOT)/bin/id $(ROOT)/bin/rootid && chmod 4755 $(ROOT)/bin/rootid
 	chmod 0600 $(ROOT)/etc/shadow
+	chmod 1777 $(ROOT)/tmp
 	python3 tools/mkcpio.py $(ROOT) owners $(TARGET)
 
 $(ROOTFS): $(TARGET)

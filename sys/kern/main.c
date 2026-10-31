@@ -4,6 +4,7 @@
 #include <boot_info.h>
 #include <console.h>
 #include <devfs.h>
+#include <errno.h>
 #include <ext2.h>
 #include <ktime.h>
 #include <machdep.h>
@@ -15,6 +16,7 @@
 #include <ramfs.h>
 #include <sched.h>
 #include <thread.h>
+#include <tmpfs.h>
 #include <vfs.h>
 #include <virtio.h>
 
@@ -33,7 +35,8 @@ void kern_main(struct boot_info *boot_info) {
     virtio_blk_init();
 
     blk_scan_partitions();
-    struct fs *root = nullptr;
+    struct fs *root           = nullptr;
+    int        from_initramfs = 0;
     for (int i = 0; !root && blk_at(i); i++) {
         struct blkdev *d  = blk_at(i);
         int            ro = !ext2_clean(d);
@@ -51,6 +54,7 @@ void kern_main(struct boot_info *boot_info) {
         } else {
             printf("main: no disk to be the root\n");
         }
+        from_initramfs = 1;
     }
     if (!root || vfs_mount_root(root) != 0) {
         printf("main: cannot mount root filesystem\n");
@@ -58,6 +62,13 @@ void kern_main(struct boot_info *boot_info) {
     int err = vfs_mount("/dev", devfs_create());
     if (err) {
         printf("main: cannot mount devfs on /dev: %d\n", err);
+    }
+
+    if ((err = vfs_mount("/run", tmpfs_create(0755))) != 0 && err != -ENOENT) {
+        printf("main: cannot mount tmpfs on /run: %d\n", err);
+    }
+    if (from_initramfs && (err = vfs_mount("/tmp", tmpfs_create(01777))) != 0) {
+        printf("main: cannot mount tmpfs on /tmp: %d\n", err);
     }
 
     blk_start_flusher();
