@@ -17,22 +17,22 @@
 #include <vobj.h>
 
 struct mount {
-    struct fs    *fs;
+    struct fs *fs;
     struct vnode *root;
     struct vnode *covered;
-    char          path[64];
+    char path[64];
     struct mount *next;
 };
 
 static struct mount *mount_list;
 
-static struct spinlock file_lock  = {.name = "file"};
+static struct spinlock file_lock = {.name = "file"};
 static struct spinlock vnode_lock = {.name = "vnode"};
 
 static struct vnode *vnodes;
 static struct mount *root_mount;
-static uint32_t      next_dev = 1;
-static struct mutex  rename_lock;
+static uint32_t next_dev = 1;
+static struct mutex rename_lock;
 
 struct file *file_new(const struct file_ops *ops, int flags, void *data) {
     struct file *f = kmalloc(sizeof(*f));
@@ -51,7 +51,7 @@ struct file *file_ref(struct file *f) {
 
 void file_unref(struct file *f) {
     uint64_t flags = spin_lock_irqsave(&file_lock);
-    int      last  = --f->refs == 0;
+    int last = --f->refs == 0;
     spin_unlock_irqrestore(&file_lock, flags);
 
     if (last) {
@@ -85,7 +85,7 @@ static struct vnode *cache_find(struct fs *fs, uint64_t ino) {
 
 int vnode_get(struct fs *fs, uint64_t ino, struct vnode **out) {
     uint64_t flags = spin_lock_irqsave(&vnode_lock);
-    *out           = cache_find(fs, ino);
+    *out = cache_find(fs, ino);
     spin_unlock_irqrestore(&vnode_lock, flags);
     if (*out) {
         return 0;
@@ -96,7 +96,7 @@ int vnode_get(struct fs *fs, uint64_t ino, struct vnode **out) {
         return -ENOMEM;
     }
     memset(vn, 0, sizeof(*vn));
-    vn->fs  = fs;
+    vn->fs = fs;
     vn->ino = ino;
     int err = fs->ops->vget(fs, ino, vn);
     if (err) {
@@ -105,13 +105,13 @@ int vnode_get(struct fs *fs, uint64_t ino, struct vnode **out) {
     }
 
     flags = spin_lock_irqsave(&vnode_lock);
-    *out  = cache_find(fs, ino);
+    *out = cache_find(fs, ino);
     if (!*out) {
         vn->refs = 1;
         vn->next = vnodes;
-        vnodes   = vn;
-        *out     = vn;
-        vn       = nullptr;
+        vnodes = vn;
+        *out = vn;
+        vn = nullptr;
     }
     spin_unlock_irqrestore(&vnode_lock, flags);
 
@@ -152,7 +152,7 @@ static void release(struct vnode *vn) {
 
 void vnode_put(struct vnode *vn) {
     uint64_t flags = spin_lock_irqsave(&vnode_lock);
-    int      last  = --vn->refs == 0;
+    int last = --vn->refs == 0;
     if (last) {
         vnodes_unlink(vn);
     }
@@ -181,7 +181,7 @@ struct vobj *vfs_vobj(struct vnode *vn) {
     flags = spin_lock_irqsave(&vnode_lock);
     if (!vn->vobj) {
         vn->vobj = fresh;
-        fresh    = nullptr;
+        fresh = nullptr;
     }
     struct vobj *o = vobj_ref(vn->vobj);
     spin_unlock_irqrestore(&vnode_lock, flags);
@@ -196,17 +196,17 @@ static struct vobj *cache_of(struct vnode *vn) {
 }
 
 int vfs_fsync(struct vnode *vn) {
-    struct vobj *c   = cache_of(vn);
-    int          err = c ? vobj_sync(c) : 0;
-    int          b   = blk_sync();
+    struct vobj *c = cache_of(vn);
+    int err = c ? vobj_sync(c) : 0;
+    int b = blk_sync();
     return err ? err : b;
 }
 
 // --- Permissions -------------------------------------------------------------
 
 int vfs_permission(struct vnode *vn, int mask, int real) {
-    struct cred *c   = &curproc()->cred;
-    uid_t        uid = real ? c->ruid : c->euid;
+    struct cred *c = &curproc()->cred;
+    uid_t uid = real ? c->ruid : c->euid;
 
     if (uid == 0) {
         if ((mask & X_OK) && !S_ISDIR(vn->mode) && !(vn->mode & 0111)) {
@@ -239,9 +239,9 @@ struct vnode *vfs_root() { return vnode_ref(root_mount->root); }
 static struct vnode *root_of() { return vnode_ref(root_mount->root); }
 
 static struct vnode *cwd_of() {
-    struct proc  *p     = curproc();
-    uint64_t      flags = spin_lock_irqsave(&p->files_lock);
-    struct vnode *cwd   = vnode_ref(p->cwd ? p->cwd : root_mount->root);
+    struct proc *p = curproc();
+    uint64_t flags = spin_lock_irqsave(&p->files_lock);
+    struct vnode *cwd = vnode_ref(p->cwd ? p->cwd : root_mount->root);
     spin_unlock_irqrestore(&p->files_lock, flags);
     return cwd;
 }
@@ -262,7 +262,7 @@ static int parent_of(struct vnode *vn, struct vnode **out) {
         return 0;
     }
     uint64_t ino = 0;
-    int      err = vn->fs->vops->lookup(vn, "..", 2, &ino);
+    int err = vn->fs->vops->lookup(vn, "..", 2, &ino);
     return err ? err : vnode_get(vn->fs, ino, out);
 }
 
@@ -276,7 +276,7 @@ static int child_of(struct vnode *dir, const char *name, size_t len,
         return parent_of(dir, out);
     }
     uint64_t ino;
-    int      err = dir->fs->vops->lookup(dir, name, len, &ino);
+    int err = dir->fs->vops->lookup(dir, name, len, &ino);
     if (err) {
         return err;
     }
@@ -303,9 +303,9 @@ static long read_link(struct vnode *vn, char *buf, size_t n) {
 struct walk {
     struct vnode *dir;
     struct vnode *vn;
-    char          name[NAME_MAX + 1];
-    size_t        len;
-    int           slash;
+    char name[NAME_MAX + 1];
+    size_t len;
+    int slash;
 };
 
 static int walk(struct vnode *base, const char *path, int flags,
@@ -317,7 +317,7 @@ static int walk(struct vnode *base, const char *path, int flags,
     if (plen > PATH_MAX) {
         return -ENAMETOOLONG;
     }
-    char *buf  = kmalloc(PATH_MAX);
+    char *buf = kmalloc(PATH_MAX);
     char *link = kmalloc(PATH_MAX);
     if (!buf || !link) {
         kfree(buf);
@@ -330,9 +330,9 @@ static int walk(struct vnode *base, const char *path, int flags,
                         : base         ? vnode_ref(base)
                                        : cwd_of();
 
-    int   links = 0, err = 0;
+    int links = 0, err = 0;
     char *p = buf;
-    *w      = (struct walk){0};
+    *w = (struct walk){0};
     while (1) {
         while (*p == '/') {
             p++;
@@ -340,7 +340,7 @@ static int walk(struct vnode *base, const char *path, int flags,
         if (!*p) {
             if (flags & W_PARENT) {
                 w->dir = cur;
-                w->vn  = vnode_ref(cur);
+                w->vn = vnode_ref(cur);
             } else {
                 w->vn = cur;
             }
@@ -352,12 +352,12 @@ static int walk(struct vnode *base, const char *path, int flags,
         while (*p && *p != '/') {
             p++;
         }
-        size_t      n = (size_t)(p - c);
+        size_t n = (size_t)(p - c);
         const char *q = p;
         while (*q == '/') {
             q++;
         }
-        int last  = !*q;
+        int last = !*q;
         int slash = last && q != p;
         if (n > NAME_MAX) {
             err = -ENAMETOOLONG;
@@ -373,10 +373,10 @@ static int walk(struct vnode *base, const char *path, int flags,
         if (last && (flags & W_PARENT)) {
             memcpy(w->name, c, n);
             w->name[n] = '\0';
-            w->len     = n;
-            w->slash   = slash;
-            w->dir     = cur;
-            cur        = nullptr;
+            w->len = n;
+            w->slash = slash;
+            w->dir = cur;
+            cur = nullptr;
             break;
         }
         struct vnode *next;
@@ -431,7 +431,7 @@ static void walk_done(struct walk *w) {
 int vfs_lookup(struct vnode *base, const char *path, int flags,
                struct vnode **out) {
     struct walk w;
-    int         err = walk(base, path, flags & (VFS_FOLLOW | VFS_REAL), &w);
+    int err = walk(base, path, flags & (VFS_FOLLOW | VFS_REAL), &w);
     if (!err) {
         *out = w.vn;
     }
@@ -462,12 +462,12 @@ static struct mount *mount_new(struct fs *fs) {
     if (!m) {
         return nullptr;
     }
-    fs->dev    = next_dev++;
-    m->fs      = fs;
+    fs->dev = next_dev++;
+    m->fs = fs;
     m->covered = nullptr;
     m->path[0] = '/';
     m->path[1] = '\0';
-    m->next    = nullptr;
+    m->next = nullptr;
     if (vnode_get(fs, fs->root_ino, &m->root) != 0) {
         kfree(m);
         return nullptr;
@@ -488,7 +488,7 @@ int vfs_mount_root(struct fs *fs) {
 
 int vfs_mount(const char *path, struct fs *fs) {
     struct vnode *vn;
-    int           err = vfs_lookup(nullptr, path, VFS_FOLLOW, &vn);
+    int err = vfs_lookup(nullptr, path, VFS_FOLLOW, &vn);
     if (err) {
         return err;
     }
@@ -503,22 +503,121 @@ int vfs_mount(const char *path, struct fs *fs) {
         vnode_put(vn);
         return -ENOMEM;
     }
-    m->covered     = vn;
+    m->covered = vn;
     vn->covered_by = m;
-    size_t i       = 0;
+    size_t i = 0;
     for (; path[i] && i < sizeof(m->path) - 1; i++) {
         m->path[i] = path[i];
     }
-    m->path[i]         = '\0';
+    m->path[i] = '\0';
+    uint64_t flags = spin_lock_irqsave(&vnode_lock);
     struct mount **end = &mount_list;
     while (*end) {
         end = &(*end)->next;
     }
     *end = m;
+    spin_unlock_irqrestore(&vnode_lock, flags);
+    return 0;
+}
+
+int vfs_blk_mounted(struct blkdev *dev) {
+    for (struct mount *m = root_mount; m;
+         m = m == root_mount ? mount_list : m->next) {
+        if (m->fs->blk && (m->fs->blk == dev || m->fs->blk->whole == dev ||
+                           dev->whole == m->fs->blk)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static struct mount *mount_at(const char *path, int root, int *err) {
+    struct vnode *vn;
+    if ((*err = vfs_lookup(nullptr, path, VFS_FOLLOW, &vn)) != 0) {
+        return nullptr;
+    }
+    struct mount *m = vn->root_of;
+    vnode_put(vn);
+    if (!m || (m == root_mount && !root)) {
+        *err = m ? -EBUSY : -EINVAL;
+        return nullptr;
+    }
+    return m;
+}
+
+int vfs_remount(const char *path, int ro) {
+    int err;
+    struct mount *m = mount_at(path, 0, &err);
+    if (!m) {
+        return err;
+    }
+    if (!m->fs->ops->remount) {
+        return 0;
+    }
+    blk_sync();
+    err = m->fs->ops->remount(m->fs, ro);
+    blk_sync();
+    return err;
+}
+
+int vfs_umount(const char *path) {
+    int err;
+    struct mount *m = mount_at(path, 0, &err);
+    if (!m) {
+        return err;
+    }
+    struct fs *fs = m->fs;
+    uint64_t flags = spin_lock_irqsave(&vnode_lock);
+    struct vnode *gone = nullptr;
+    for (struct vnode *vn = vnodes; vn; vn = vn->next) {
+        if (vn->fs == fs && vn->refs > (vn == m->root ? 1 : 0)) {
+            spin_unlock_irqrestore(&vnode_lock, flags);
+            return -EBUSY;
+        }
+    }
+    for (struct vnode **pp = &vnodes; *pp;) {
+        struct vnode *vn = *pp;
+        if (vn->fs != fs) {
+            pp = &vn->next;
+            continue;
+        }
+        *pp = vn->next;
+        vn->next = gone;
+        gone = vn;
+    }
+    for (struct mount **pp = &mount_list; *pp; pp = &(*pp)->next) {
+        if (*pp == m) {
+            *pp = m->next;
+            break;
+        }
+    }
+    m->covered->covered_by = nullptr;
+    spin_unlock_irqrestore(&vnode_lock, flags);
+    while (gone) {
+        struct vnode *vn = gone;
+        gone = vn->next;
+        release(vn);
+    }
+    vnode_put(m->covered);
+    blk_sync();
+    if (fs->ops->shutdown) {
+        fs->ops->shutdown(fs);
+    }
+    blk_sync();
+    if (fs->blk) {
+        blk_invalidate(fs->blk);
+    }
+    if (fs->ops->destroy) {
+        fs->ops->destroy(fs);
+    }
+    kfree(m);
     return 0;
 }
 
 long vnode_write(struct vnode *vn, const void *buf, size_t n, uint64_t off) {
+    if (!vn->fs->vops->write) {
+        return -EROFS;
+    }
     if (n) {
         vfs_touch(vn, VFS_MTIME | VFS_CTIME, 0);
     }
@@ -533,10 +632,10 @@ long vnode_read_user(struct vnode *vn, void *ubuf, size_t n, uint64_t off) {
         return -ENOMEM;
     }
     size_t done = 0;
-    long   err  = 0;
+    long err = 0;
     while (done < n) {
-        size_t k   = n - done < BOUNCE ? n - done : BOUNCE;
-        long   got = vn->fs->vops->read(vn, b, k, off + done);
+        size_t k = n - done < BOUNCE ? n - done : BOUNCE;
+        long got = vn->fs->vops->read(vn, b, k, off + done);
         if (got > 0 && cache_of(vn)) {
             vobj_overlay(vn->vobj, off + done, b, (size_t)got);
         }
@@ -563,7 +662,7 @@ long vnode_write_user(struct vnode *vn, const void *ubuf, size_t n,
         return -ENOMEM;
     }
     size_t done = 0;
-    long   err  = 0;
+    long err = 0;
     while (done < n) {
         size_t k = n - done < BOUNCE ? n - done : BOUNCE;
         if (copy_from_user(b, (const char *)ubuf + done, k) != 0) {
@@ -603,8 +702,8 @@ static long vnode_file_read(struct file *f, void *buf, size_t n) {
 static struct mutex append_lock;
 
 static long vnode_file_write(struct file *f, const void *buf, size_t n) {
-    struct vnode *vn     = f->vnode;
-    int           append = f->flags & O_APPEND;
+    struct vnode *vn = f->vnode;
+    int append = f->flags & O_APPEND;
     if (append) {
         mutex_lock(&append_lock);
         f->offset = (long)vn->size;
@@ -622,15 +721,15 @@ static long vnode_file_write(struct file *f, const void *buf, size_t n) {
 static long vnode_file_size(struct file *f) { return (long)f->vnode->size; }
 
 static const struct file_ops vnode_file_ops = {
-    .read  = vnode_file_read,
+    .read = vnode_file_read,
     .write = vnode_file_write,
-    .size  = vnode_file_size,
+    .size = vnode_file_size,
 };
 
 static void new_owner(struct vnode *dir, uint32_t *uid, uint32_t *gid) {
     struct cred *c = &curproc()->cred;
-    *uid           = c->euid;
-    *gid           = (dir->mode & S_ISGID) ? dir->gid : c->egid;
+    *uid = c->euid;
+    *gid = (dir->mode & S_ISGID) ? dir->gid : c->egid;
 }
 
 static int make_node(struct vnode *dir, const char *name, size_t len,
@@ -684,7 +783,7 @@ int vfs_open_vnode(struct vnode *vn, int flags, struct file **out) {
 static int open_path(struct vnode *base, const char *path, int flags,
                      struct file **out) {
     struct vnode *vn;
-    int           err =
+    int err =
         vfs_lookup(base, path, (flags & O_NOFOLLOW) ? 0 : VFS_FOLLOW, &vn);
     if (err) {
         return err;
@@ -705,7 +804,7 @@ static int open_creat(struct vnode *base, const char *path, int flags,
                       uint32_t mode, struct vnode **out, int *created,
                       int depth) {
     struct walk w;
-    int         err = walk_parent(base, path, &w);
+    int err = walk_parent(base, path, &w);
     if (err) {
         return err;
     }
@@ -725,9 +824,9 @@ static int open_creat(struct vnode *base, const char *path, int flags,
         err = -ELOOP;
     } else if (S_ISLNK(w.vn->mode)) {
         char *target = kmalloc(PATH_MAX);
-        long  n = !target                ? -ENOMEM
-                  : depth >= SYMLOOP_MAX ? -ELOOP
-                                         : read_link(w.vn, target, PATH_MAX);
+        long n = !target                ? -ENOMEM
+                 : depth >= SYMLOOP_MAX ? -ELOOP
+                                        : read_link(w.vn, target, PATH_MAX);
         if (n > 0) {
             target[n] = '\0';
             err =
@@ -752,7 +851,7 @@ int vfs_open(struct vnode *base, const char *path, int flags, uint32_t mode,
         return -EINVAL;
     }
     struct vnode *vn;
-    int           created = 0, err;
+    int created = 0, err;
     if (flags & O_CREAT) {
         err = open_creat(base, path, flags, mode, &vn, &created, 0);
     } else {
@@ -763,7 +862,7 @@ int vfs_open(struct vnode *base, const char *path, int flags, uint32_t mode,
         return err;
     }
 
-    int acc  = flags & O_ACCMODE;
+    int acc = flags & O_ACCMODE;
     int need = (acc == O_RDONLY   ? R_OK
                 : acc == O_WRONLY ? W_OK
                                   : R_OK | W_OK) |
@@ -784,7 +883,7 @@ int vfs_open(struct vnode *base, const char *path, int flags, uint32_t mode,
 
 int vfs_mkdir(struct vnode *base, const char *path, uint32_t mode) {
     struct walk w;
-    int         err = walk_parent(base, path, &w);
+    int err = walk_parent(base, path, &w);
     if (err) {
         return err;
     }
@@ -817,7 +916,7 @@ int vfs_mknod(struct vnode *base, const char *path, uint32_t mode,
         return -EINVAL;
     }
     struct walk w;
-    int         err = walk_parent(base, path, &w);
+    int err = walk_parent(base, path, &w);
     if (err) {
         return err;
     }
@@ -843,7 +942,7 @@ int vfs_symlink(const char *target, struct vnode *base, const char *path) {
         return -ENAMETOOLONG;
     }
     struct walk w;
-    int         err = walk_parent(base, path, &w);
+    int err = walk_parent(base, path, &w);
     if (err) {
         return err;
     }
@@ -868,7 +967,7 @@ int vfs_symlink(const char *target, struct vnode *base, const char *path) {
 
 long vfs_readlink(struct vnode *base, const char *path, char *buf, size_t n) {
     struct vnode *vn;
-    long          err = vfs_lookup(base, path, 0, &vn);
+    long err = vfs_lookup(base, path, 0, &vn);
     if (err) {
         return err;
     }
@@ -885,7 +984,7 @@ long vfs_readlink(struct vnode *base, const char *path, char *buf, size_t n) {
 int vfs_link(struct vnode *obase, const char *opath, struct vnode *nbase,
              const char *npath, int flags) {
     struct vnode *vn;
-    int           err = vfs_lookup(obase, opath, flags & VFS_FOLLOW, &vn);
+    int err = vfs_lookup(obase, opath, flags & VFS_FOLLOW, &vn);
     if (err) {
         return err;
     }
@@ -920,7 +1019,7 @@ int vfs_link(struct vnode *obase, const char *opath, struct vnode *nbase,
 
 static int remove(struct vnode *base, const char *path, int want_dir) {
     struct walk w;
-    int         err = walk_parent(base, path, &w);
+    int err = walk_parent(base, path, &w);
     if (err) {
         return err;
     }
@@ -963,8 +1062,8 @@ int vfs_rmdir(struct vnode *base, const char *path) {
 }
 
 static int is_below(struct vnode *dir, struct vnode *vn) {
-    struct vnode *cur   = vnode_ref(dir);
-    int           below = 0;
+    struct vnode *cur = vnode_ref(dir);
+    int below = 0;
     while (!below) {
         if (cur == vn) {
             below = 1;
@@ -986,7 +1085,7 @@ static int is_below(struct vnode *dir, struct vnode *vn) {
 
 static int rename_checks(struct walk *o, struct walk *n, int flags) {
     struct vnode *moved = o->vn, *victim = n->vn;
-    int           err;
+    int err;
     if (!o->len || !n->len) {
         return -EBUSY;
     }
@@ -1042,7 +1141,7 @@ int vfs_rename(struct vnode *obase, const char *opath, struct vnode *nbase,
         return -EINVAL;
     }
     struct walk o, n;
-    int         err = walk_parent(obase, opath, &o);
+    int err = walk_parent(obase, opath, &o);
     if (err) {
         return err;
     }
@@ -1098,7 +1197,7 @@ int vfs_exec_check(struct vnode *vn) {
 
 int vfs_exec_open(const char *path, struct vnode **out) {
     struct vnode *vn;
-    int           err = vfs_lookup(nullptr, path, VFS_FOLLOW, &vn);
+    int err = vfs_lookup(nullptr, path, VFS_FOLLOW, &vn);
     if (err) {
         return err;
     }
@@ -1113,12 +1212,12 @@ int vfs_exec_open(const char *path, struct vnode **out) {
 
 int vfs_access(struct vnode *base, const char *path, int mask, int flags) {
     struct vnode *vn;
-    int           err = vfs_lookup(base, path, flags, &vn);
+    int err = vfs_lookup(base, path, flags, &vn);
     if (err) {
         return err;
     }
     int real = (flags & VFS_REAL) != 0;
-    err      = mask ? vfs_permission(vn, mask, real) : 0;
+    err = mask ? vfs_permission(vn, mask, real) : 0;
     if (!err && (mask & W_OK) &&
         (S_ISREG(vn->mode) || S_ISDIR(vn->mode) || S_ISLNK(vn->mode)) &&
         !vn->fs->vops->write) {
@@ -1154,11 +1253,11 @@ int vfs_chdir(struct vnode *dir) {
     if (err) {
         return err;
     }
-    struct proc  *p     = curproc();
+    struct proc *p = curproc();
     struct vnode *fresh = vnode_ref(dir);
-    uint64_t      flags = spin_lock_irqsave(&p->files_lock);
-    struct vnode *old   = p->cwd;
-    p->cwd              = fresh;
+    uint64_t flags = spin_lock_irqsave(&p->files_lock);
+    struct vnode *old = p->cwd;
+    p->cwd = fresh;
     spin_unlock_irqrestore(&p->files_lock, flags);
     if (old) {
         vnode_put(old);
@@ -1169,7 +1268,7 @@ int vfs_chdir(struct vnode *dir) {
 static int name_in(struct vnode *parent, struct vnode *vn,
                    struct vfs_dirent *de) {
     uint64_t pos = 0;
-    int      got;
+    int got;
     while ((got = parent->fs->vops->readdir(parent, &pos, de)) > 0) {
         size_t n = strlen(de->name);
         if (de->ino == vn->ino && !is_dot(de->name, n)) {
@@ -1180,11 +1279,11 @@ static int name_in(struct vnode *parent, struct vnode *vn,
 }
 
 long vfs_getcwd(char *buf, size_t size) {
-    char              *path = kmalloc(PATH_MAX);
-    struct vfs_dirent *de   = kmalloc(sizeof(*de));
-    struct vnode      *vn   = cwd_of();
-    size_t             at   = PATH_MAX - 1;
-    long               err  = !path || !de ? -ENOMEM : 0;
+    char *path = kmalloc(PATH_MAX);
+    struct vfs_dirent *de = kmalloc(sizeof(*de));
+    struct vnode *vn = cwd_of();
+    size_t at = PATH_MAX - 1;
+    long err = !path || !de ? -ENOMEM : 0;
     if (!err && vn->nlink == 0) {
         err = -ENOENT;
     }
@@ -1281,7 +1380,7 @@ int vfs_utimes(struct vnode *vn, const struct k_timespec *ts) {
     if (!vn->fs->vops->setattr) {
         return -EROFS;
     }
-    uint64_t  now      = (uint64_t)(time_real() / NSEC);
+    uint64_t now = (uint64_t)(time_real() / NSEC);
     uint64_t *field[2] = {&vn->atime, &vn->mtime};
     for (int i = 0; i < 2; i++) {
         if (!ts || ts[i].nsec == UTIME_NOW) {
@@ -1363,17 +1462,17 @@ long vfs_lseek(struct file *f, long offset, int whence) {
 
 void vfs_stat(struct vnode *vn, struct stat *st) {
     memset(st, 0, sizeof(*st));
-    st->st_dev     = vn->fs->dev;
-    st->st_ino     = vn->ino;
-    st->st_rdev    = vn->rdev;
-    st->st_mode    = vn->mode;
-    st->st_nlink   = vn->nlink;
-    st->st_uid     = vn->uid;
-    st->st_gid     = vn->gid;
-    st->st_size    = (int64_t)vn->size;
+    st->st_dev = vn->fs->dev;
+    st->st_ino = vn->ino;
+    st->st_rdev = vn->rdev;
+    st->st_mode = vn->mode;
+    st->st_nlink = vn->nlink;
+    st->st_uid = vn->uid;
+    st->st_gid = vn->gid;
+    st->st_size = (int64_t)vn->size;
     st->st_blksize = 4096;
-    st->st_blocks  = (int64_t)((vn->size + 511) / 512);
-    st->st_atime   = vn->atime;
-    st->st_mtime   = vn->mtime;
-    st->st_ctime   = vn->ctime;
+    st->st_blocks = (int64_t)((vn->size + 511) / 512);
+    st->st_atime = vn->atime;
+    st->st_mtime = vn->mtime;
+    st->st_ctime = vn->ctime;
 }

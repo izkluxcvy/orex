@@ -1,6 +1,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <blk.h>
 #include <devfs.h>
 #include <errno.h>
 #include <kmalloc.h>
@@ -14,6 +15,7 @@
 #include <vfs.h>
 
 #define ROOT_INO 1
+#define BLK_INO  3000
 
 #define DEV(major, minor) (((uint64_t)(major) << 8) | (minor))
 #define SERIAL_INO        4
@@ -183,6 +185,13 @@ static int devfs_lookup(struct vnode *dir, const char *name, size_t len,
             return 0;
         }
     }
+    for (int i = 0; dir->ino == ROOT_INO && blk_at(i); i++) {
+        const char *n = blk_at(i)->name;
+        if (length(n) == len && memcmp(n, name, len) == 0) {
+            *ino = BLK_INO + (uint64_t)i;
+            return 0;
+        }
+    }
     return -ENOENT;
 }
 
@@ -205,6 +214,10 @@ static int devfs_readdir(struct vnode *dir, uint64_t *pos,
         out->ino  = i + 2;
         out->type = DT_CHR;
         set_name(out, devices[i].name);
+    } else if (blk_at((int)(i - NDEV))) {
+        out->ino  = BLK_INO + (i - NDEV);
+        out->type = DT_BLK;
+        set_name(out, blk_at((int)(i - NDEV))->name);
     } else {
         return 0;
     }
@@ -223,6 +236,13 @@ static int devfs_vget(struct fs *fs, uint64_t ino, struct vnode *vn) {
         vn->nlink = 2;
         return 0;
     }
+    if (ino >= BLK_INO && blk_at((int)(ino - BLK_INO))) {
+        struct blkdev *b = blk_at((int)(ino - BLK_INO));
+        vn->mode         = S_IFBLK | 0600;
+        vn->rdev         = DEV(b->whole ? 259 : 254, ino - BLK_INO);
+        vn->size         = b->sectors * 512;
+        return 0;
+    }
     const struct device *d = dev_of(ino);
     if (!d) {
         return -ENOENT;
@@ -233,14 +253,28 @@ static int devfs_vget(struct fs *fs, uint64_t ino, struct vnode *vn) {
     return 0;
 }
 
+static const struct fs_ops devfs_ops;
+
+struct blkdev *devfs_blkdev(struct vnode *vn) {
+    return vn->fs->ops == &devfs_ops && vn->ino >= BLK_INO
+               ? blk_at((int)(vn->ino - BLK_INO))
+               : nullptr;
+}
+
 int devfs_open(struct vnode *vn, int flags, struct file **out) {
-    const struct device *d   = dev_of(vn->ino);
-    int                  err = d ? d->open(flags, out) : -ENOENT;
+    int                  err;
+    const struct device *d = dev_of(vn->ino);
+    if (vn->ino >= BLK_INO) {
+        struct blkdev *b = blk_at((int)(vn->ino - BLK_INO));
+        err              = b ? blk_open(b, flags, out) : -ENOENT;
+    } else {
+        err = d ? d->open(flags, out) : -ENOENT;
+    }
     if (err) {
         return err;
     }
     uint64_t real = vn->ino;
-    if (d->open == ctty_open) {
+    if (d && d->open == ctty_open) {
         real = curproc()->ctty == tty_fb() ? FB_INO : SERIAL_INO;
     }
     if (real == vn->ino) {
@@ -256,7 +290,13 @@ static const struct vnode_ops devfs_vops = {
     .readdir = devfs_readdir,
 };
 
-static const struct fs_ops devfs_ops = {.vget = devfs_vget, .open = devfs_open};
+static void devfs_usage(struct fs *fs, struct fs_usage *u) {
+    (void)fs;
+    *u = (struct fs_usage){.magic = 0x1373, .bsize = 4096};
+}
+
+static const struct fs_ops devfs_ops = {
+    .vget = devfs_vget, .open = devfs_open, .usage = devfs_usage};
 
 struct fs *devfs_create() {
     struct fs *fs = kmalloc(sizeof(*fs));

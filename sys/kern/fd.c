@@ -256,11 +256,30 @@ static struct vnode *positional(struct file *f, long off, long *err) {
     return nullptr;
 }
 
+static long block_at(struct file *f, void *buf, long n, long off, int write) {
+    if (off < 0 || n < 0) {
+        return -EINVAL;
+    }
+    long saved = f->offset;
+    f->offset  = off;
+    long r     = write ? f->ops->write(f, buf, (size_t)n)
+                       : f->ops->read(f, buf, (size_t)n);
+    f->offset  = saved;
+    return r;
+}
+
+static int is_block(struct file *f) {
+    return f->vnode && S_ISBLK(f->vnode->mode) && f->ops->size;
+}
+
 long sys_pread64(long fd, void *buf, long n, long off) {
     struct file *f = fd_get_io(fd);
     long         err;
     if (!f || (f->flags & O_ACCMODE) == O_WRONLY) {
         return -EBADF;
+    }
+    if (is_block(f)) {
+        return block_at(f, buf, n, off, 0);
     }
     struct vnode *vn = positional(f, off, &err);
     if (!vn) {
@@ -281,6 +300,9 @@ long sys_pwrite64(long fd, const void *buf, long n, long off) {
     long         err;
     if (!f || (f->flags & O_ACCMODE) == O_RDONLY) {
         return -EBADF;
+    }
+    if (is_block(f)) {
+        return block_at(f, (void *)buf, n, off, 1);
     }
     struct vnode *vn = positional(f, off, &err);
     if (!vn) {

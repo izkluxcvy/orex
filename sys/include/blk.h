@@ -15,9 +15,13 @@ struct blkdev {
     struct blkdev *whole;
 };
 
-void           blk_register(struct blkdev *dev);
-void           blk_scan_partitions();
-void           blk_invalidate(struct blkdev *dev);
+void blk_register(struct blkdev *dev);
+void blk_scan_partitions();
+int  blk_index(const struct blkdev *dev);
+void blk_invalidate(struct blkdev *dev);
+
+struct file;
+int            blk_open(struct blkdev *dev, int flags, struct file **out);
 struct blkdev *blk_find(const char *name);
 struct blkdev *blk_at(int index);
 

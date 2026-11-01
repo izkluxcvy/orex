@@ -22,7 +22,7 @@
 #define AT_SYMLINK_FOLLOW 0x400
 
 struct upath {
-    char         *path;
+    char *path;
     struct vnode *base;
 };
 
@@ -37,10 +37,10 @@ static long get_path(long dirfd, const char *upath, struct upath *u) {
         return len;
     }
     if (u->path[0] != '/' && dirfd != AT_FDCWD) {
-        struct file *f   = fd_get(dirfd);
-        long         err = !f                                      ? -EBADF
-                           : !f->vnode || !S_ISDIR(f->vnode->mode) ? -ENOTDIR
-                                                                   : 0;
+        struct file *f = fd_get(dirfd);
+        long err = !f                                      ? -EBADF
+                   : !f->vnode || !S_ISDIR(f->vnode->mode) ? -ENOTDIR
+                                                           : 0;
         if (err) {
             kfree(u->path);
             return err;
@@ -73,7 +73,7 @@ static long at_vnode(long dirfd, const char *upath, long flags,
     }
 
     struct upath u;
-    long         err = get_path(dirfd, upath, &u);
+    long err = get_path(dirfd, upath, &u);
     if (err) {
         return err;
     }
@@ -85,7 +85,7 @@ static long at_vnode(long dirfd, const char *upath, long flags,
 
 static long sys_openat(long dirfd, const char *upath, long flags, long mode) {
     struct upath u;
-    long         err = get_path(dirfd, upath, &u);
+    long err = get_path(dirfd, upath, &u);
     if (err) {
         return err;
     }
@@ -131,7 +131,7 @@ static long sys_fstatat(long dirfd, const char *upath, struct stat *ust,
         return sys_fstat(dirfd, ust);
     }
     struct vnode *vn;
-    long          err = at_vnode(dirfd, upath, flags, &vn);
+    long err = at_vnode(dirfd, upath, flags, &vn);
     if (err) {
         return err;
     }
@@ -143,10 +143,10 @@ static long sys_fstatat(long dirfd, const char *upath, struct stat *ust,
 
 struct dirent64 {
     uint64_t d_ino;
-    int64_t  d_off;
+    int64_t d_off;
     uint16_t d_reclen;
-    uint8_t  d_type;
-    char     d_name[];
+    uint8_t d_type;
+    char d_name[];
 } __attribute__((packed));
 
 #define DENTS_MAX 65536
@@ -166,8 +166,8 @@ static long sys_getdents64(long fd, void *ubuf, long count) {
         count = DENTS_MAX;
     }
 
-    struct vfs_dirent *de  = kmalloc(sizeof(*de));
-    uint8_t           *out = kmalloc(count ? (size_t)count : 1);
+    struct vfs_dirent *de = kmalloc(sizeof(*de));
+    uint8_t *out = kmalloc(count ? (size_t)count : 1);
     if (!de || !out) {
         kfree(de);
         kfree(out);
@@ -177,7 +177,7 @@ static long sys_getdents64(long fd, void *ubuf, long count) {
 
     while (1) {
         uint64_t pos = (uint64_t)f->offset;
-        int      got = f->vnode->fs->vops->readdir(f->vnode, &pos, de);
+        int got = f->vnode->fs->vops->readdir(f->vnode, &pos, de);
         if (got <= 0) {
             if (got < 0 && used == 0) {
                 used = got;
@@ -199,10 +199,10 @@ static long sys_getdents64(long fd, void *ubuf, long count) {
         }
 
         struct dirent64 *d = (struct dirent64 *)(out + used);
-        d->d_ino           = de->ino;
-        d->d_off           = (int64_t)pos;
-        d->d_reclen        = (uint16_t)reclen;
-        d->d_type          = de->type;
+        d->d_ino = de->ino;
+        d->d_off = (int64_t)pos;
+        d->d_reclen = (uint16_t)reclen;
+        d->d_type = de->type;
         memcpy(d->d_name, de->name, namelen + 1);
         used += (long)reclen;
         f->offset = (long)pos;
@@ -221,7 +221,7 @@ static long sys_getdents64(long fd, void *ubuf, long count) {
 
 static long sys_mkdirat(long dirfd, const char *upath, long mode) {
     struct upath u;
-    long         err = get_path(dirfd, upath, &u);
+    long err = get_path(dirfd, upath, &u);
     if (err) {
         return err;
     }
@@ -238,7 +238,7 @@ static uint64_t dev_decode(uint64_t dev) {
 
 static long sys_mknodat(long dirfd, const char *upath, long mode, long dev) {
     struct upath u;
-    long         err = get_path(dirfd, upath, &u);
+    long err = get_path(dirfd, upath, &u);
     if (err) {
         return err;
     }
@@ -252,7 +252,7 @@ static long sys_unlinkat(long dirfd, const char *upath, long flags) {
         return -EINVAL;
     }
     struct upath u;
-    long         err = get_path(dirfd, upath, &u);
+    long err = get_path(dirfd, upath, &u);
     if (err) {
         return err;
     }
@@ -264,7 +264,7 @@ static long sys_unlinkat(long dirfd, const char *upath, long flags) {
 
 static long sys_symlinkat(const char *utarget, long dirfd, const char *upath) {
     struct upath t, u;
-    long         err = get_path(AT_FDCWD, utarget, &t);
+    long err = get_path(AT_FDCWD, utarget, &t);
     if (err) {
         return err;
     }
@@ -282,12 +282,12 @@ static long sys_readlinkat(long dirfd, const char *upath, char *ubuf,
         return -EINVAL;
     }
     struct upath u;
-    long         err = get_path(dirfd, upath, &u);
+    long err = get_path(dirfd, upath, &u);
     if (err) {
         return err;
     }
     char *buf = kmalloc(PATH_MAX);
-    err       = buf ? vfs_readlink(u.base, u.path, buf, PATH_MAX) : -ENOMEM;
+    err = buf ? vfs_readlink(u.base, u.path, buf, PATH_MAX) : -ENOMEM;
     put_path(&u);
     if (err > size) {
         err = size;
@@ -305,7 +305,7 @@ static long sys_linkat(long odirfd, const char *uold, long ndirfd,
         return -EINVAL;
     }
     struct upath o, n;
-    long         err = get_path(odirfd, uold, &o);
+    long err = get_path(odirfd, uold, &o);
     if (err) {
         return err;
     }
@@ -321,7 +321,7 @@ static long sys_linkat(long odirfd, const char *uold, long ndirfd,
 static long sys_renameat2(long odirfd, const char *uold, long ndirfd,
                           const char *unew, long flags) {
     struct upath o, n;
-    long         err = get_path(odirfd, uold, &o);
+    long err = get_path(odirfd, uold, &o);
     if (err) {
         return err;
     }
@@ -335,7 +335,7 @@ static long sys_renameat2(long odirfd, const char *uold, long ndirfd,
 
 static long sys_truncate(const char *upath, long size) {
     struct vnode *vn;
-    long          err = at_vnode(AT_FDCWD, upath, 0, &vn);
+    long err = at_vnode(AT_FDCWD, upath, 0, &vn);
     if (err) {
         return err;
     }
@@ -367,13 +367,13 @@ static long sys_faccessat(long dirfd, const char *upath, long mode,
         return -EINVAL;
     }
     struct upath u;
-    long         err = get_path(dirfd, upath, &u);
+    long err = get_path(dirfd, upath, &u);
     if (err) {
         return err;
     }
     int vflags = ((flags & AT_SYMLINK_NOFOLLOW) ? 0 : VFS_FOLLOW) |
                  ((flags & AT_EACCESS) ? 0 : VFS_REAL);
-    err        = vfs_access(u.base, u.path, (int)mode, vflags);
+    err = vfs_access(u.base, u.path, (int)mode, vflags);
     put_path(&u);
     return err;
 }
@@ -384,7 +384,7 @@ static long attr_at(long dirfd, const char *upath, long flags, int chmod,
         return -EINVAL;
     }
     struct vnode *vn;
-    long          err;
+    long err;
     if (!upath) {
         struct file *f = fd_get_io(dirfd);
         if (!f) {
@@ -417,7 +417,7 @@ static long sys_utimensat(long dirfd, const char *upath,
         return -EFAULT;
     }
     struct vnode *vn;
-    long          err;
+    long err;
     if (!upath) {
         struct file *f = fd_get_io(dirfd);
         if (!f || !f->vnode) {
@@ -433,15 +433,15 @@ static long sys_utimensat(long dirfd, const char *upath,
 }
 
 static long sys_umask(long mask) {
-    struct proc *p   = curproc();
-    long         old = p->umask;
-    p->umask         = (uint32_t)mask & 0777;
+    struct proc *p = curproc();
+    long old = p->umask;
+    p->umask = (uint32_t)mask & 0777;
     return old;
 }
 
 static long sys_chdir(const char *upath) {
     struct vnode *vn;
-    long          err = at_vnode(AT_FDCWD, upath, 0, &vn);
+    long err = at_vnode(AT_FDCWD, upath, 0, &vn);
     if (err) {
         return err;
     }
@@ -474,6 +474,55 @@ static long sys_getcwd(char *ubuf, long size) {
     return len;
 }
 
+struct k_statfs {
+    int64_t type, bsize, blocks, bfree, bavail, files, ffree;
+    int32_t fsid[2];
+    int64_t namelen, frsize, flags, spare[4];
+};
+
+#define ST_RDONLY 1
+
+static long statfs_of(struct vnode *vn, struct k_statfs *ust) {
+    struct fs_usage u = {.bsize = 4096};
+    if (vn->fs->ops->usage) {
+        vn->fs->ops->usage(vn->fs, &u);
+    }
+    struct k_statfs st = {.type = (int64_t)u.magic,
+                          .bsize = (int64_t)u.bsize,
+                          .blocks = (int64_t)u.blocks,
+                          .bfree = (int64_t)u.bfree,
+                          .bavail = (int64_t)u.bavail,
+                          .files = (int64_t)u.files,
+                          .ffree = (int64_t)u.ffree,
+                          .fsid = {(int32_t)vn->fs->dev, 0},
+                          .namelen = NAME_MAX,
+                          .frsize = (int64_t)u.bsize,
+                          .flags = vn->fs->vops->write ? 0 : ST_RDONLY};
+    return copy_to_user(ust, &st, sizeof(st));
+}
+
+static long sys_statfs(const char *upath, struct k_statfs *ust) {
+    struct vnode *vn;
+    long err = at_vnode(AT_FDCWD, upath, 0, &vn);
+    if (err) {
+        return err;
+    }
+    err = statfs_of(vn, ust);
+    vnode_put(vn);
+    return err;
+}
+
+static long sys_fstatfs(long fd, struct k_statfs *ust) {
+    struct file *f = fd_get(fd);
+    if (!f) {
+        return -EBADF;
+    }
+    if (!f->vnode) {
+        return -ENOSYS;
+    }
+    return statfs_of(f->vnode, ust);
+}
+
 static long do_execve(long dirfd, const char *upath, const char *const *uargv,
                       const char *const *uenvp, long flags) {
     if (flags & ~(long)(AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW)) {
@@ -483,7 +532,7 @@ static long do_execve(long dirfd, const char *upath, const char *const *uargv,
     if (!path) {
         return -ENOMEM;
     }
-    long          err   = copy_str_from_user(path, upath, PATH_MAX);
+    long err = copy_str_from_user(path, upath, PATH_MAX);
     struct vnode *given = nullptr;
     if (err >= 0 && (dirfd != AT_FDCWD || flags)) {
         err = at_vnode(dirfd, upath, flags, &given);
@@ -508,6 +557,10 @@ static long sys_execve(const char *upath, const char *const *uargv,
     return do_execve(AT_FDCWD, upath, uargv, uenvp, 0);
 }
 
+long sys_mount(const char *src, const char *target, const char *type,
+               unsigned long flags, const void *data);
+long sys_umount2(const char *target, int flags);
+
 #define RUSAGE_SIZE 144
 
 static long sys_wait4(long pid, int *ustatus, long options, void *urusage) {
@@ -518,8 +571,8 @@ static long sys_wait4(long pid, int *ustatus, long options, void *urusage) {
     if (ustatus && uaccess_prepare(ustatus, sizeof(int), 1) != 0) {
         return -EFAULT;
     }
-    int   status          = 0;
-    char  ru[RUSAGE_SIZE] = {0};
+    int status = 0;
+    char ru[RUSAGE_SIZE] = {0};
     pid_t ret =
         proc_wait((pid_t)pid, &status, (int)options | WEXITED, nullptr, ru);
     if (ret > 0 && ustatus) {
@@ -562,9 +615,9 @@ static long sys_waitid(long idtype, long id, struct siginfo *uinfo,
     default:
         return -EINVAL;
     }
-    struct siginfo info            = {0};
-    char           ru[RUSAGE_SIZE] = {0};
-    pid_t          ret = proc_wait(pid, nullptr, (int)options, &info, ru);
+    struct siginfo info = {0};
+    char ru[RUSAGE_SIZE] = {0};
+    pid_t ret = proc_wait(pid, nullptr, (int)options, &info, ru);
     if (ret < 0) {
         return ret;
     }
@@ -667,6 +720,10 @@ long syscall_dispatch(long nr, long a0, long a1, long a2, long a3, long a4,
         return sys_truncate((const char *)a0, a1);
     case SYS_ftruncate:
         return sys_ftruncate(a0, a1);
+    case SYS_statfs:
+        return sys_statfs((const char *)a0, (struct k_statfs *)a1);
+    case SYS_fstatfs:
+        return sys_fstatfs(a0, (struct k_statfs *)a1);
     case SYS_fchmodat2:
         return attr_at(a0, (const char *)a1, a3, 1, a2, 0);
     case SYS_chown:
@@ -686,6 +743,11 @@ long syscall_dispatch(long nr, long a0, long a1, long a2, long a3, long a4,
     case SYS_fsync:
     case SYS_fdatasync:
         return sys_fsync(a0);
+    case SYS_mount:
+        return sys_mount((const char *)a0, (const char *)a1, (const char *)a2,
+                         (unsigned long)a3, (const void *)a4);
+    case SYS_umount2:
+        return sys_umount2((const char *)a0, (int)a1);
     case SYS_sync:
         return blk_sync(), 0;
     case SYS_umask:

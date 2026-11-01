@@ -113,10 +113,18 @@ struct vnode_ops {
     struct vobj *(*vobj)(struct vnode *vn);
 };
 
+struct fs_usage {
+    uint64_t magic, bsize, blocks, bfree, bavail, files, ffree;
+};
+
 struct fs_ops {
     int (*vget)(struct fs *fs, uint64_t ino, struct vnode *vn);
+    void (*usage)(struct fs *fs, struct fs_usage *u);
     void (*vput)(struct vnode *vn);
     int (*open)(struct vnode *vn, int flags, struct file **out);
+    void (*shutdown)(struct fs *fs);
+    int (*remount)(struct fs *fs, int ro);
+    void (*destroy)(struct fs *fs);
 };
 
 struct fs {
@@ -179,8 +187,12 @@ long vnode_read_user(struct vnode *vn, void *ubuf, size_t n, uint64_t off);
 long vnode_write_user(struct vnode *vn, const void *ubuf, size_t n,
                       uint64_t off);
 
-int           vfs_mount_root(struct fs *fs);
-int           vfs_mount(const char *path, struct fs *fs);
+int vfs_mount_root(struct fs *fs);
+int vfs_mount(const char *path, struct fs *fs);
+int vfs_umount(const char *path);
+int vfs_remount(const char *path, int ro);
+struct blkdev;
+int           vfs_blk_mounted(struct blkdev *dev);
 struct vnode *vfs_root();
 
 #define VFS_FOLLOW 1

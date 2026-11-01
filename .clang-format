@@ -1,7 +1,5 @@
 BasedOnStyle: LLVM
 IndentWidth: 4
-AlignConsecutiveDeclarations: true
-AlignConsecutiveAssignments: true
 AlignConsecutiveBitFields: true
 AlignConsecutiveMacros: true
 

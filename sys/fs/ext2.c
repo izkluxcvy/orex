@@ -80,19 +80,19 @@ struct ext2_inode {
 struct ext2_dirent {
     uint32_t inode;
     uint16_t rec_len;
-    uint8_t  name_len, file_type;
-    char     name[];
+    uint8_t name_len, file_type;
+    char name[];
 } __attribute__((packed));
 
 #define STATE_VALID 1
 #define STATE_ERROR 2
 
 struct ext2_fs {
-    struct fs      fs;
+    struct fs fs;
     struct blkdev *dev;
-    struct mutex   lock;
+    struct mutex lock;
 
-    uint8_t            sb_raw[1024];
+    uint8_t sb_raw[1024];
     struct ext2_super *sb;
     struct ext2_group *gdt;
 
@@ -100,7 +100,7 @@ struct ext2_fs {
     uint32_t inode_size;
     uint32_t gdt_block;
     uint32_t groups;
-    int      can_write;
+    int can_write;
 };
 
 static struct ext2_fs *efs_of(struct vnode *vn) {
@@ -118,7 +118,7 @@ static uint32_t sectors_per_block(struct ext2_fs *e) {
 static int read_bytes(struct ext2_fs *e, uint64_t block, uint32_t off,
                       void *dst, size_t len) {
     struct buf *b;
-    int         err = bread(e->dev, block, e->block_size, &b);
+    int err = bread(e->dev, block, e->block_size, &b);
     if (err) {
         return err;
     }
@@ -130,9 +130,9 @@ static int read_bytes(struct ext2_fs *e, uint64_t block, uint32_t off,
 static int write_bytes(struct ext2_fs *e, uint64_t block, uint32_t off,
                        const void *src, size_t len) {
     struct buf *b;
-    int         whole = off == 0 && len == e->block_size;
-    int         err   = whole ? bget(e->dev, block, e->block_size, &b)
-                              : bread(e->dev, block, e->block_size, &b);
+    int whole = off == 0 && len == e->block_size;
+    int err = whole ? bget(e->dev, block, e->block_size, &b)
+                    : bread(e->dev, block, e->block_size, &b);
     if (err) {
         return err;
     }
@@ -148,7 +148,7 @@ static int write_bytes(struct ext2_fs *e, uint64_t block, uint32_t off,
 
 static int sync_super(struct ext2_fs *e) {
     struct buf *b;
-    int         err = bread(e->dev, SUPERBLOCK_OFF / 1024, 1024, &b);
+    int err = bread(e->dev, SUPERBLOCK_OFF / 1024, 1024, &b);
     if (err) {
         return err;
     }
@@ -174,9 +174,9 @@ static int inode_io(struct ext2_fs *e, uint32_t ino, struct ext2_inode *ip,
         return -ENOENT;
     }
 
-    uint64_t off   = (uint64_t)index * e->inode_size;
+    uint64_t off = (uint64_t)index * e->inode_size;
     uint64_t block = e->gdt[group].inode_table + off / e->block_size;
-    uint32_t boff  = (uint32_t)(off % e->block_size);
+    uint32_t boff = (uint32_t)(off % e->block_size);
     return write ? write_bytes(e, block, boff, ip, sizeof(*ip))
                  : read_bytes(e, block, boff, ip, sizeof(*ip));
 }
@@ -191,7 +191,7 @@ static uint64_t file_size(struct ext2_fs *e, struct ext2_inode *ip) {
 }
 
 static int sync_vnode(struct vnode *vn) {
-    struct ext2_fs    *e  = efs_of(vn);
+    struct ext2_fs *e = efs_of(vn);
     struct ext2_inode *ip = inode_of(vn);
 
     ip->size = (uint32_t)vn->size;
@@ -199,14 +199,14 @@ static int sync_vnode(struct vnode *vn) {
         ip->size_high = (uint32_t)(vn->size >> 32);
     }
     ip->links_count = (uint16_t)vn->nlink;
-    ip->mode        = (uint16_t)vn->mode;
-    ip->uid         = (uint16_t)vn->uid;
-    ip->uid_high    = (uint16_t)(vn->uid >> 16);
-    ip->gid         = (uint16_t)vn->gid;
-    ip->gid_high    = (uint16_t)(vn->gid >> 16);
-    ip->atime       = (uint32_t)vn->atime;
-    ip->mtime       = (uint32_t)vn->mtime;
-    ip->ctime       = (uint32_t)vn->ctime;
+    ip->mode = (uint16_t)vn->mode;
+    ip->uid = (uint16_t)vn->uid;
+    ip->uid_high = (uint16_t)(vn->uid >> 16);
+    ip->gid = (uint16_t)vn->gid;
+    ip->gid_high = (uint16_t)(vn->gid >> 16);
+    ip->atime = (uint32_t)vn->atime;
+    ip->mtime = (uint32_t)vn->mtime;
+    ip->ctime = (uint32_t)vn->ctime;
     return inode_io(e, vn->ino, ip, 1);
 }
 
@@ -215,7 +215,7 @@ static int sync_vnode(struct vnode *vn) {
 static int bitmap_take(struct ext2_fs *e, uint32_t bitmap, uint32_t limit,
                        uint32_t *bit) {
     struct buf *b;
-    int         err = bread(e->dev, bitmap, e->block_size, &b);
+    int err = bread(e->dev, bitmap, e->block_size, &b);
     if (err) {
         return err;
     }
@@ -224,7 +224,7 @@ static int bitmap_take(struct ext2_fs *e, uint32_t bitmap, uint32_t limit,
         if (!(b->data[i / 8] & (1u << (i % 8)))) {
             b->data[i / 8] |= (uint8_t)(1u << (i % 8));
             *bit = i;
-            err  = bwrite(b);
+            err = bwrite(b);
             break;
         }
     }
@@ -234,7 +234,7 @@ static int bitmap_take(struct ext2_fs *e, uint32_t bitmap, uint32_t limit,
 
 static int bitmap_clear(struct ext2_fs *e, uint32_t bitmap, uint32_t bit) {
     struct buf *b;
-    int         err = bread(e->dev, bitmap, e->block_size, &b);
+    int err = bread(e->dev, bitmap, e->block_size, &b);
     if (err) {
         return err;
     }
@@ -257,7 +257,7 @@ static int block_alloc(struct ext2_fs *e, struct ext2_inode *ip,
                              ? e->sb->blocks_count - first
                              : bpg;
         uint32_t bit;
-        int      err = bitmap_take(e, e->gdt[g].block_bitmap, limit, &bit);
+        int err = bitmap_take(e, e->gdt[g].block_bitmap, limit, &bit);
         if (err == -ENOSPC) {
             continue;
         }
@@ -281,8 +281,8 @@ static int block_free(struct ext2_fs *e, struct ext2_inode *ip,
                       uint32_t block) {
     bforget(e->dev, block, e->block_size);
     uint32_t rel = block - e->sb->first_data_block;
-    uint32_t g   = rel / e->sb->blocks_per_group;
-    int      err =
+    uint32_t g = rel / e->sb->blocks_per_group;
+    int err =
         bitmap_clear(e, e->gdt[g].block_bitmap, rel % e->sb->blocks_per_group);
     if (err) {
         return err;
@@ -304,7 +304,7 @@ static int inode_alloc(struct ext2_fs *e, int dir, uint32_t *ino) {
             continue;
         }
         uint32_t bit;
-        int      err = bitmap_take(e, e->gdt[g].inode_bitmap, ipg, &bit);
+        int err = bitmap_take(e, e->gdt[g].inode_bitmap, ipg, &bit);
         if (err == -ENOSPC) {
             continue;
         }
@@ -331,9 +331,9 @@ static int inode_alloc(struct ext2_fs *e, int dir, uint32_t *ino) {
 }
 
 static int inode_free(struct ext2_fs *e, uint32_t ino, int dir) {
-    uint32_t g   = (ino - 1) / e->sb->inodes_per_group;
-    int      err = bitmap_clear(e, e->gdt[g].inode_bitmap,
-                                (ino - 1) % e->sb->inodes_per_group);
+    uint32_t g = (ino - 1) / e->sb->inodes_per_group;
+    int err = bitmap_clear(e, e->gdt[g].inode_bitmap,
+                           (ino - 1) % e->sb->inodes_per_group);
     if (err) {
         return err;
     }
@@ -353,7 +353,7 @@ static int inode_free(struct ext2_fs *e, uint32_t ino, int dir) {
 static int bmap(struct ext2_fs *e, struct ext2_inode *ip, uint64_t fblock,
                 int alloc, uint32_t *out) {
     uint32_t per = e->block_size / 4;
-    int      err;
+    int err;
 
     if (fblock < NDIRECT) {
         if (!ip->block[fblock] && alloc &&
@@ -365,7 +365,7 @@ static int bmap(struct ext2_fs *e, struct ext2_inode *ip, uint64_t fblock,
     }
     fblock -= NDIRECT;
 
-    int      level;
+    int level;
     uint64_t span = per;
     for (level = 1; level <= 3 && fblock >= span; level++) {
         fblock -= span;
@@ -437,13 +437,13 @@ static int trim_tree(struct ext2_fs *e, struct ext2_inode *ip, uint32_t *slot,
     }
     if (base >= keep) {
         int err = free_tree(e, ip, *slot, level);
-        *slot   = 0;
+        *slot = 0;
         return err;
     }
     if (level == 0) {
         return 0;
     }
-    uint32_t per  = e->block_size / 4;
+    uint32_t per = e->block_size / 4;
     uint64_t span = 1;
     for (int i = 1; i < level; i++) {
         span *= per;
@@ -466,9 +466,9 @@ static int trim_tree(struct ext2_fs *e, struct ext2_inode *ip, uint32_t *slot,
 }
 
 static int truncate_locked(struct vnode *vn, uint64_t size) {
-    struct ext2_fs    *e   = efs_of(vn);
-    struct ext2_inode *ip  = inode_of(vn);
-    int                err = 0;
+    struct ext2_fs *e = efs_of(vn);
+    struct ext2_inode *ip = inode_of(vn);
+    int err = 0;
 
     if (!has_blocks(vn)) {
         if (size == 0) {
@@ -476,7 +476,7 @@ static int truncate_locked(struct vnode *vn, uint64_t size) {
         }
     } else if (size < vn->size) {
         uint64_t keep = (size + e->block_size - 1) / e->block_size;
-        uint32_t per  = e->block_size / 4;
+        uint32_t per = e->block_size / 4;
         uint64_t base = NDIRECT;
         uint64_t span = per;
         for (int i = 0; i < NDIRECT && !err; i++) {
@@ -488,7 +488,7 @@ static int truncate_locked(struct vnode *vn, uint64_t size) {
             base += span;
             span *= per;
         }
-        uint32_t tail  = (uint32_t)(size % e->block_size);
+        uint32_t tail = (uint32_t)(size % e->block_size);
         uint32_t block = 0;
         if (!err && tail &&
             (err = bmap(e, ip, size / e->block_size, 0, &block)) == 0 &&
@@ -504,9 +504,9 @@ static int truncate_locked(struct vnode *vn, uint64_t size) {
 // --- file data ---------------------------------------------------------------
 
 static long read_locked(struct vnode *vn, void *buf, size_t n, uint64_t off) {
-    struct ext2_fs    *e   = efs_of(vn);
-    struct ext2_inode *ip  = inode_of(vn);
-    uint8_t           *out = buf;
+    struct ext2_fs *e = efs_of(vn);
+    struct ext2_inode *ip = inode_of(vn);
+    uint8_t *out = buf;
 
     if (off >= vn->size) {
         return 0;
@@ -518,14 +518,14 @@ static long read_locked(struct vnode *vn, void *buf, size_t n, uint64_t off) {
     size_t done = 0;
     while (done < n) {
         uint64_t fblock = (off + done) / e->block_size;
-        uint32_t boff   = (uint32_t)((off + done) % e->block_size);
-        size_t   chunk  = e->block_size - boff;
+        uint32_t boff = (uint32_t)((off + done) % e->block_size);
+        size_t chunk = e->block_size - boff;
         if (chunk > n - done) {
             chunk = n - done;
         }
 
         uint32_t block;
-        int      err = bmap(e, ip, fblock, 0, &block);
+        int err = bmap(e, ip, fblock, 0, &block);
         if (!err && block) {
             err = read_bytes(e, block, boff, out + done, chunk);
         } else if (!err) {
@@ -541,9 +541,9 @@ static long read_locked(struct vnode *vn, void *buf, size_t n, uint64_t off) {
 
 static long write_locked(struct vnode *vn, const void *buf, size_t n,
                          uint64_t off) {
-    struct ext2_fs    *e  = efs_of(vn);
+    struct ext2_fs *e = efs_of(vn);
     struct ext2_inode *ip = inode_of(vn);
-    const uint8_t     *in = buf;
+    const uint8_t *in = buf;
 
     uint64_t max = (e->sb->feature_ro_compat & RO_COMPAT_LARGE_FILE)
                        ? (uint64_t)1 << 40
@@ -556,11 +556,11 @@ static long write_locked(struct vnode *vn, const void *buf, size_t n,
     }
 
     size_t done = 0;
-    int    err  = 0;
+    int err = 0;
     while (done < n) {
         uint64_t fblock = (off + done) / e->block_size;
-        uint32_t boff   = (uint32_t)((off + done) % e->block_size);
-        size_t   chunk  = e->block_size - boff;
+        uint32_t boff = (uint32_t)((off + done) % e->block_size);
+        size_t chunk = e->block_size - boff;
         if (chunk > n - done) {
             chunk = n - done;
         }
@@ -594,10 +594,10 @@ static int next_dirent(struct vnode *dir, uint64_t *pos,
     struct ext2_fs *e = efs_of(dir);
 
     while (*pos < dir->size) {
-        uint8_t             raw[sizeof(struct ext2_dirent) + NAME_MAX + 1];
-        struct ext2_dirent *h    = (struct ext2_dirent *)raw;
-        uint32_t            boff = (uint32_t)(*pos % e->block_size);
-        size_t              room = e->block_size - boff;
+        uint8_t raw[sizeof(struct ext2_dirent) + NAME_MAX + 1];
+        struct ext2_dirent *h = (struct ext2_dirent *)raw;
+        uint32_t boff = (uint32_t)(*pos % e->block_size);
+        size_t room = e->block_size - boff;
 
         long got = read_locked(dir, raw,
                                room < sizeof(raw) ? room : sizeof(raw), *pos);
@@ -613,7 +613,7 @@ static int next_dirent(struct vnode *dir, uint64_t *pos,
             continue;
         }
 
-        out->ino  = h->inode;
+        out->ino = h->inode;
         out->type = dt_of_ft(h->file_type);
         memcpy(out->name, h->name, h->name_len);
         out->name[h->name_len] = '\0';
@@ -630,7 +630,7 @@ static int lookup_locked(struct vnode *dir, const char *name, size_t len,
     }
 
     uint64_t pos = 0;
-    int      got, err = -ENOENT;
+    int got, err = -ENOENT;
     while ((got = next_dirent(dir, &pos, de)) > 0) {
         size_t n = 0;
         while (de->name[n]) {
@@ -638,7 +638,7 @@ static int lookup_locked(struct vnode *dir, const char *name, size_t len,
         }
         if (n == len && memcmp(de->name, name, len) == 0) {
             *ino = de->ino;
-            err  = 0;
+            err = 0;
             break;
         }
     }
@@ -651,16 +651,16 @@ static int lookup_locked(struct vnode *dir, const char *name, size_t len,
 
 static int add_entry(struct vnode *dir, const char *name, size_t len,
                      uint32_t ino, uint8_t type) {
-    struct ext2_fs    *e    = efs_of(dir);
-    struct ext2_inode *ip   = inode_of(dir);
-    size_t             need = dirent_len(len);
-    int                err;
+    struct ext2_fs *e = efs_of(dir);
+    struct ext2_inode *ip = inode_of(dir);
+    size_t need = dirent_len(len);
+    int err;
 
     ip->flags &= ~INDEX_FL;
 
     uint64_t nblocks = dir->size / e->block_size;
     for (uint64_t fb = 0; fb <= nblocks; fb++) {
-        int      grow = (fb == nblocks);
+        int grow = (fb == nblocks);
         uint32_t block;
         if ((err = bmap(e, ip, fb, grow, &block)) != 0) {
             return err;
@@ -676,7 +676,7 @@ static int add_entry(struct vnode *dir, const char *name, size_t len,
 
         struct ext2_dirent *slot = nullptr;
         if (grow) {
-            slot          = (struct ext2_dirent *)b->data;
+            slot = (struct ext2_dirent *)b->data;
             slot->rec_len = (uint16_t)e->block_size;
             dir->size += e->block_size;
         }
@@ -692,7 +692,7 @@ static int add_entry(struct vnode *dir, const char *name, size_t len,
                         (struct ext2_dirent *)(b->data + off + used);
                     n->rec_len = (uint16_t)(h->rec_len - used);
                     h->rec_len = (uint16_t)used;
-                    h          = n;
+                    h = n;
                 }
                 slot = h;
             }
@@ -700,8 +700,8 @@ static int add_entry(struct vnode *dir, const char *name, size_t len,
         }
 
         if (slot) {
-            slot->inode     = ino;
-            slot->name_len  = (uint8_t)len;
+            slot->inode = ino;
+            slot->name_len = (uint8_t)len;
             slot->file_type = type;
             memcpy(slot->name, name, len);
             err = bwrite(b);
@@ -715,14 +715,14 @@ static int add_entry(struct vnode *dir, const char *name, size_t len,
 }
 
 static int remove_entry(struct vnode *dir, const char *name, size_t len) {
-    struct ext2_fs    *e  = efs_of(dir);
+    struct ext2_fs *e = efs_of(dir);
     struct ext2_inode *ip = inode_of(dir);
 
     ip->flags &= ~INDEX_FL;
 
     for (uint64_t fb = 0; fb < dir->size / e->block_size; fb++) {
         uint32_t block;
-        int      err = bmap(e, ip, fb, 0, &block);
+        int err = bmap(e, ip, fb, 0, &block);
         if (err) {
             return err;
         }
@@ -762,12 +762,12 @@ static int remove_entry(struct vnode *dir, const char *name, size_t len) {
 
 static int retarget_entry(struct vnode *dir, const char *name, size_t len,
                           uint32_t ino, uint8_t type) {
-    struct ext2_fs    *e  = efs_of(dir);
+    struct ext2_fs *e = efs_of(dir);
     struct ext2_inode *ip = inode_of(dir);
 
     for (uint64_t fb = 0; fb < dir->size / e->block_size; fb++) {
         uint32_t block;
-        int      err = bmap(e, ip, fb, 0, &block);
+        int err = bmap(e, ip, fb, 0, &block);
         if (err) {
             return err;
         }
@@ -785,9 +785,9 @@ static int retarget_entry(struct vnode *dir, const char *name, size_t len,
             }
             if (h->inode && h->name_len == len &&
                 memcmp(h->name, name, len) == 0) {
-                h->inode     = ino;
+                h->inode = ino;
                 h->file_type = type;
-                err          = bwrite(b);
+                err = bwrite(b);
                 brelse(b);
                 return err;
             }
@@ -803,9 +803,9 @@ static int dir_is_empty(struct vnode *dir) {
     if (!de) {
         return -ENOMEM;
     }
-    uint64_t pos   = 0;
-    int      got   = 0;
-    int      empty = 1;
+    uint64_t pos = 0;
+    int got = 0;
+    int empty = 1;
     while (empty && (got = next_dirent(dir, &pos, de)) > 0) {
         empty =
             de->name[0] == '.' && (de->name[1] == '\0' ||
@@ -823,12 +823,12 @@ static int make_inode(struct ext2_fs *e, uint32_t mode, uint16_t links,
         return err;
     }
     memset(ip, 0, sizeof(*ip));
-    ip->mode        = (uint16_t)mode;
+    ip->mode = (uint16_t)mode;
     ip->links_count = links;
-    ip->uid         = (uint16_t)uid;
-    ip->uid_high    = (uint16_t)(uid >> 16);
-    ip->gid         = (uint16_t)gid;
-    ip->gid_high    = (uint16_t)(gid >> 16);
+    ip->uid = (uint16_t)uid;
+    ip->uid_high = (uint16_t)(uid >> 16);
+    ip->gid = (uint16_t)gid;
+    ip->gid_high = (uint16_t)(gid >> 16);
     ip->atime = ip->mtime = ip->ctime = (uint32_t)(time_real() / NSEC);
     return 0;
 }
@@ -844,7 +844,7 @@ static long ext2_read(struct vnode *vn, void *buf, size_t n, uint64_t off) {
 }
 
 static long ext2_readlink(struct vnode *vn, char *buf, size_t n) {
-    struct ext2_fs    *e  = efs_of(vn);
+    struct ext2_fs *e = efs_of(vn);
     struct ext2_inode *ip = inode_of(vn);
     if (n > vn->size) {
         n = vn->size;
@@ -887,10 +887,10 @@ static long ext2_write(struct vnode *vn, const void *buf, size_t n,
 }
 
 static int ext2_truncate(struct vnode *vn, uint64_t size) {
-    struct ext2_fs *e   = efs_of(vn);
-    uint64_t        max = (e->sb->feature_ro_compat & RO_COMPAT_LARGE_FILE)
-                              ? (uint64_t)1 << 40
-                              : 0x7fff'ffffULL;
+    struct ext2_fs *e = efs_of(vn);
+    uint64_t max = (e->sb->feature_ro_compat & RO_COMPAT_LARGE_FILE)
+                       ? (uint64_t)1 << 40
+                       : 0x7fff'ffffULL;
     if (size > max) {
         return -EFBIG;
     }
@@ -934,10 +934,10 @@ static int new_entry(struct vnode *dir, const char *name, size_t len,
 static int ext2_create(struct vnode *dir, const char *name, size_t len,
                        uint32_t mode, uint64_t rdev, uint32_t uid, uint32_t gid,
                        uint64_t *out) {
-    struct ext2_fs   *e = efs_of(dir);
+    struct ext2_fs *e = efs_of(dir);
     struct ext2_inode ip;
-    uint32_t          ino;
-    uint64_t          existing;
+    uint32_t ino;
+    uint64_t existing;
 
     mutex_lock(&e->lock);
     int err = lookup_locked(dir, name, len, &existing);
@@ -957,10 +957,10 @@ static int ext2_create(struct vnode *dir, const char *name, size_t len,
 static int ext2_symlink(struct vnode *dir, const char *name, size_t len,
                         const char *target, size_t tlen, uint32_t uid,
                         uint32_t gid) {
-    struct ext2_fs   *e = efs_of(dir);
+    struct ext2_fs *e = efs_of(dir);
     struct ext2_inode ip;
-    uint32_t          ino;
-    uint64_t          existing;
+    uint32_t ino;
+    uint64_t existing;
     if (tlen >= e->block_size) {
         return -ENAMETOOLONG;
     }
@@ -988,7 +988,7 @@ static int ext2_symlink(struct vnode *dir, const char *name, size_t len,
 static int ext2_link(struct vnode *dir, const char *name, size_t len,
                      struct vnode *vn) {
     struct ext2_fs *e = efs_of(dir);
-    uint64_t        existing;
+    uint64_t existing;
     mutex_lock(&e->lock);
     int err = lookup_locked(dir, name, len, &existing);
     if (err == 0) {
@@ -1006,9 +1006,9 @@ static int ext2_link(struct vnode *dir, const char *name, size_t len,
 static int ext2_rename(struct vnode *odir, const char *oname, size_t olen,
                        struct vnode *ndir, const char *nname, size_t nlen,
                        struct vnode *moved, struct vnode *victim) {
-    struct ext2_fs *e      = efs_of(odir);
-    int             is_dir = S_ISDIR(moved->mode);
-    int             err    = 0;
+    struct ext2_fs *e = efs_of(odir);
+    int is_dir = S_ISDIR(moved->mode);
+    int err = 0;
     mutex_lock(&e->lock);
     if (victim && S_ISDIR(victim->mode)) {
         err = dir_is_empty(victim);
@@ -1045,7 +1045,7 @@ static int ext2_rename(struct vnode *odir, const char *oname, size_t olen,
         int e1 = sync_vnode(odir);
         int e2 = sync_vnode(ndir);
         int e3 = sync_vnode(moved);
-        err    = e1 ? e1 : e2 ? e2 : e3;
+        err = e1 ? e1 : e2 ? e2 : e3;
     }
     mutex_unlock(&e->lock);
     return err;
@@ -1053,10 +1053,10 @@ static int ext2_rename(struct vnode *odir, const char *oname, size_t olen,
 
 static int ext2_mkdir(struct vnode *dir, const char *name, size_t len,
                       uint32_t mode, uint32_t uid, uint32_t gid) {
-    struct ext2_fs   *e = efs_of(dir);
+    struct ext2_fs *e = efs_of(dir);
     struct ext2_inode ip;
-    uint32_t          ino, block;
-    uint64_t          existing;
+    uint32_t ino, block;
+    uint64_t existing;
 
     mutex_lock(&e->lock);
     int err = lookup_locked(dir, name, len, &existing);
@@ -1067,17 +1067,17 @@ static int ext2_mkdir(struct vnode *dir, const char *name, size_t len,
     } else if (err == -ENOENT &&
                (err = make_inode(e, mode, 2, uid, gid, &ino, &ip)) == 0 &&
                (err = block_alloc(e, &ip, &block)) == 0) {
-        uint8_t             ents[24] = {0};
-        struct ext2_dirent *dot      = (struct ext2_dirent *)ents;
-        struct ext2_dirent *dotdot   = (struct ext2_dirent *)(ents + 12);
-        *dot                         = (struct ext2_dirent){ino, 12, 1, FT_DIR};
-        *dotdot                      = (struct ext2_dirent){
+        uint8_t ents[24] = {0};
+        struct ext2_dirent *dot = (struct ext2_dirent *)ents;
+        struct ext2_dirent *dotdot = (struct ext2_dirent *)(ents + 12);
+        *dot = (struct ext2_dirent){ino, 12, 1, FT_DIR};
+        *dotdot = (struct ext2_dirent){
             (uint32_t)dir->ino, (uint16_t)(e->block_size - 12), 2, FT_DIR};
-        dot->name[0]    = '.';
+        dot->name[0] = '.';
         dotdot->name[0] = dotdot->name[1] = '.';
 
         ip.block[0] = block;
-        ip.size     = e->block_size;
+        ip.size = e->block_size;
         if ((err = write_bytes(e, block, 0, ents, sizeof(ents))) == 0 &&
             (err = inode_io(e, ino, &ip, 1)) == 0 &&
             (err = add_entry(dir, name, len, ino, FT_DIR)) == 0) {
@@ -1129,7 +1129,7 @@ static int ext2_setattr(struct vnode *vn) {
 }
 
 static int ext2_vget(struct fs *fs, uint64_t ino, struct vnode *vn) {
-    struct ext2_fs    *e  = (struct ext2_fs *)fs;
+    struct ext2_fs *e = (struct ext2_fs *)fs;
     struct ext2_inode *ip = kmalloc(sizeof(*ip));
     if (!ip) {
         return -ENOMEM;
@@ -1142,15 +1142,15 @@ static int ext2_vget(struct fs *fs, uint64_t ino, struct vnode *vn) {
         return err;
     }
 
-    vn->mode  = ip->mode;
-    vn->uid   = ip->uid | (uint32_t)ip->uid_high << 16;
-    vn->gid   = ip->gid | (uint32_t)ip->gid_high << 16;
+    vn->mode = ip->mode;
+    vn->uid = ip->uid | (uint32_t)ip->uid_high << 16;
+    vn->gid = ip->gid | (uint32_t)ip->gid_high << 16;
     vn->nlink = ip->links_count;
-    vn->size  = file_size(e, ip);
+    vn->size = file_size(e, ip);
     vn->atime = ip->atime;
     vn->mtime = ip->mtime;
     vn->ctime = ip->ctime;
-    vn->priv  = ip;
+    vn->priv = ip;
     if (S_ISCHR(vn->mode) || (vn->mode & S_IFMT) == S_IFBLK) {
         vn->rdev = get_rdev(ip);
     }
@@ -1158,7 +1158,7 @@ static int ext2_vget(struct fs *fs, uint64_t ino, struct vnode *vn) {
 }
 
 static void ext2_vput(struct vnode *vn) {
-    struct ext2_fs    *e  = efs_of(vn);
+    struct ext2_fs *e = efs_of(vn);
     struct ext2_inode *ip = inode_of(vn);
 
     if (vn->nlink == 0 && vn->fs->vops->write) {
@@ -1175,28 +1175,53 @@ static void ext2_vput(struct vnode *vn) {
 }
 
 static const struct vnode_ops ext2_vops_rw = {
-    .lookup   = ext2_lookup,
-    .read     = ext2_read,
-    .readdir  = ext2_readdir,
+    .lookup = ext2_lookup,
+    .read = ext2_read,
+    .readdir = ext2_readdir,
     .readlink = ext2_readlink,
-    .write    = ext2_write,
+    .write = ext2_write,
     .truncate = ext2_truncate,
-    .create   = ext2_create,
-    .mkdir    = ext2_mkdir,
-    .symlink  = ext2_symlink,
-    .link     = ext2_link,
-    .unlink   = ext2_unlink,
-    .rmdir    = ext2_rmdir,
-    .rename   = ext2_rename,
-    .setattr  = ext2_setattr,
+    .create = ext2_create,
+    .mkdir = ext2_mkdir,
+    .symlink = ext2_symlink,
+    .link = ext2_link,
+    .unlink = ext2_unlink,
+    .rmdir = ext2_rmdir,
+    .rename = ext2_rename,
+    .setattr = ext2_setattr,
 };
 
 static const struct vnode_ops ext2_vops_ro = {
-    .lookup   = ext2_lookup,
-    .read     = ext2_read,
-    .readdir  = ext2_readdir,
+    .lookup = ext2_lookup,
+    .read = ext2_read,
+    .readdir = ext2_readdir,
     .readlink = ext2_readlink,
 };
+
+static void ext2_usage(struct fs *fs, struct fs_usage *u) {
+    struct ext2_fs *e = (struct ext2_fs *)fs;
+    uint32_t r = e->sb->r_blocks_count;
+    uint32_t f = e->sb->free_blocks_count;
+    *u = (struct fs_usage){.magic = EXT2_MAGIC,
+                           .bsize = e->block_size,
+                           .blocks = e->sb->blocks_count,
+                           .bfree = f,
+                           .bavail = f > r ? f - r : 0,
+                           .files = e->sb->inodes_count,
+                           .ffree = e->sb->free_inodes_count};
+}
+
+static void ext2_shutdown(struct fs *fs) {
+    struct ext2_fs *e = (struct ext2_fs *)fs;
+    if (e->fs.vops != &ext2_vops_rw) {
+        return;
+    }
+    mutex_lock(&e->lock);
+    e->sb->state |= STATE_VALID;
+    e->sb->wtime = (uint32_t)(time_real() / NSEC);
+    sync_super(e);
+    mutex_unlock(&e->lock);
+}
 
 static void mark_mounted(struct ext2_fs *e) {
     struct ext2_super *sb = e->sb;
@@ -1209,18 +1234,46 @@ static void mark_mounted(struct ext2_fs *e) {
     sync_super(e);
 }
 
-static const struct fs_ops ext2_ops = {.vget = ext2_vget, .vput = ext2_vput};
+static int ext2_remount(struct fs *fs, int ro) {
+    struct ext2_fs *e = (struct ext2_fs *)fs;
+    if (!ro && !e->can_write) {
+        return -EROFS;
+    }
+    if (ro && e->fs.vops == &ext2_vops_rw) {
+        ext2_shutdown(fs);
+        e->fs.vops = &ext2_vops_ro;
+    } else if (!ro && e->fs.vops != &ext2_vops_rw) {
+        mutex_lock(&e->lock);
+        mark_mounted(e);
+        mutex_unlock(&e->lock);
+        e->fs.vops = &ext2_vops_rw;
+    }
+    return 0;
+}
+
+static void ext2_destroy(struct fs *fs) {
+    struct ext2_fs *e = (struct ext2_fs *)fs;
+    kfree(e->gdt);
+    kfree(e);
+}
+
+static const struct fs_ops ext2_ops = {.vget = ext2_vget,
+                                       .vput = ext2_vput,
+                                       .usage = ext2_usage,
+                                       .shutdown = ext2_shutdown,
+                                       .remount = ext2_remount,
+                                       .destroy = ext2_destroy};
 
 int ext2_uuid(struct blkdev *dev, char out[37]) {
     struct buf *b;
     if (bread(dev, SUPERBLOCK_OFF / 1024, 1024, &b) != 0) {
         return -1;
     }
-    const struct ext2_super *sb    = (const struct ext2_super *)b->data;
-    int                      ok    = sb->magic == EXT2_MAGIC;
-    const uint8_t           *u     = b->data + 104; // s_uuid
-    static const char        hex[] = "0123456789abcdef";
-    char                    *o     = out;
+    const struct ext2_super *sb = (const struct ext2_super *)b->data;
+    int ok = sb->magic == EXT2_MAGIC;
+    const uint8_t *u = b->data + 104; // s_uuid
+    static const char hex[] = "0123456789abcdef";
+    char *o = out;
     for (int i = 0; i < 16; i++) {
         if (i == 4 || i == 6 || i == 8 || i == 10) {
             *o++ = '-';
@@ -1276,10 +1329,10 @@ struct fs *ext2_mount(struct blkdev *dev, int ro) {
         return nullptr;
     }
 
-    e->dev        = dev;
+    e->dev = dev;
     e->block_size = 1024u << sb->log_block_size;
     e->inode_size = sb->inode_size;
-    e->gdt_block  = sb->first_data_block + 1;
+    e->gdt_block = sb->first_data_block + 1;
     e->groups =
         (sb->blocks_count - sb->first_data_block + sb->blocks_per_group - 1) /
         sb->blocks_per_group;
@@ -1302,12 +1355,12 @@ struct fs *ext2_mount(struct blkdev *dev, int ro) {
 
     e->can_write = !(sb->feature_ro_compat & ~RO_COMPAT_WRITABLE);
     int writable = e->can_write && !ro;
-    e->fs        = (struct fs){
-        .ops      = &ext2_ops,
-        .vops     = writable ? &ext2_vops_rw : &ext2_vops_ro,
-        .name     = "ext2",
+    e->fs = (struct fs){
+        .ops = &ext2_ops,
+        .vops = writable ? &ext2_vops_rw : &ext2_vops_ro,
+        .name = "ext2",
         .root_ino = EXT2_ROOT_INO,
-        .blk      = dev,
+        .blk = dev,
     };
 
     printf("ext2: %s: %lu blocks of %lu bytes, %lu groups, %s\n", dev->name,
