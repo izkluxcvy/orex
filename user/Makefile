@@ -3,11 +3,18 @@ include ../common.mk
 
 CC := clang
 LD := ld.lld
+AR := llvm-ar
 
 BASE_CFLAGS := -target $(ARCH)-elf -std=c23 -masm=intel -Wall -Wextra -O2
 BASE_CFLAGS += -fPIE -MMD -MP
 
 CFLAGS := $(BASE_CFLAGS) -ffreestanding -fno-stack-protector -mgeneral-regs-only
+
+LIBC_INC := -nostdlibinc -isystem libc/include
+SSP := -fstack-protector-strong
+LIBC_CFLAGS := $(BASE_CFLAGS) $(LIBC_INC) -Ilibc/src/internal -ffreestanding
+LIBC_CFLAGS += $(SSP)
+APP_CFLAGS := $(BASE_CFLAGS) $(LIBC_INC) $(SSP)
 
 LDFLAGS := -T user.ld -static -nostdlib
 
@@ -24,15 +31,21 @@ ROOTFS_BLOCK = 1024
 LIB_OBJS := lib/crt0.o lib/ulib.o
 PROGS := hello init cat id ls fs share
 
+LIBC := libc/libc.a
+CRT1 := libc/crt/crt1.o
+LIBC_SRCS := $(shell find libc/src -name '*.c')
+LIBC_OBJS := $(patsubst %.c,%.o,$(filter-out libc/src/ldso/dynlink.c,$(LIBC_SRCS)))
+
 ULIB_BINS := $(PROGS:%=$(ROOT)/bin/%)
 BINS := $(ULIB_BINS)
 
 STATIC := $(shell find root -type f)
 OBJS := $(LIB_OBJS) $(PROGS:%=bin/%.o)
+OBJS += $(CRT1) $(LIBC_OBJS)
 
 .PHONY: all
 
-all: $(TARGET) $(ROOTFS)
+all: $(TARGET) $(ROOTFS) $(LIBC) $(CRT1)
 
 %.o: %.c
 	$(CC) $(CFLAGS) -c -o $@ $<
@@ -40,6 +53,12 @@ all: $(TARGET) $(ROOTFS)
 $(ULIB_BINS): $(ROOT)/bin/%: bin/%.o $(LIB_OBJS) user.ld
 	mkdir -p $(dir $@)
 	$(LD) $(LDFLAGS) -o $@ $< $(LIB_OBJS)
+
+$(LIBC_OBJS) $(CRT1): CFLAGS := $(LIBC_CFLAGS)
+
+$(LIBC): $(LIBC_OBJS)
+	rm -f $@
+	$(AR) rcs $@ $^
 
 $(TARGET): owners tools/mkcpio.py $(BINS) $(STATIC)
 	mkdir -p $(ROOT)
