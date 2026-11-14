@@ -21,7 +21,7 @@ struct runqueue {
 struct spinlock sched_lock;
 
 static struct runqueue runq[SCHED_PRIO_LEVELS];
-static uint64_t        runq_bitmap[(SCHED_PRIO_LEVELS + 63) / 64];
+static uint64_t runq_bitmap[(SCHED_PRIO_LEVELS + 63) / 64];
 
 int sched_get_priority_min(int policy) { return policy == SCHED_OTHER ? 0 : 1; }
 
@@ -97,8 +97,8 @@ int sched_setscheduler(struct thread *t, int policy, int priority) {
         return -1;
     }
 
-    uint64_t flags   = spin_lock_irqsave(&sched_lock);
-    t->policy        = policy;
+    uint64_t flags = spin_lock_irqsave(&sched_lock);
+    t->policy = policy;
     t->base_priority = priority;
     mutex_pi_update(t);
     spin_unlock_irqrestore(&sched_lock, flags);
@@ -111,8 +111,8 @@ static void runq_append(struct thread *t) {
     struct runqueue *rq = &runq[t->priority];
 
     t->state = THREAD_READY;
-    t->next  = nullptr;
-    t->prev  = rq->tail;
+    t->next = nullptr;
+    t->prev = rq->tail;
 
     if (rq->tail) {
         rq->tail->next = t;
@@ -152,7 +152,7 @@ static struct thread *runq_take_highest() {
 }
 
 void schedule() {
-    struct cpu    *c    = curcpu();
+    struct cpu *c = curcpu();
     struct thread *prev = c->thread;
 
     if (prev->state == THREAD_RUNNING) {
@@ -168,8 +168,8 @@ void schedule() {
     }
 
     c->need_resched = 0;
-    next->state     = THREAD_RUNNING;
-    next->slice     = SCHED_QUANTUM;
+    next->state = THREAD_RUNNING;
+    next->slice = SCHED_QUANTUM;
 
     if (next == prev) {
         return;
@@ -180,6 +180,7 @@ void schedule() {
         context_set_kstack((uint64_t)next->stack + next->stack_size);
     }
     pmap_activate(next->pmap ? next->pmap : &kernel_pmap);
+    context_set_tls(next->tls);
     context_fpu_switch(prev, next);
     time_switch(prev, next);
     context_switch(&prev->rsp, next->rsp);
@@ -233,7 +234,7 @@ void sched_init() {
 
     spin_lock_init(&sched_lock, "sched");
 
-    cpu->id           = 0;
+    cpu->id = 0;
     cpu->need_resched = 0;
 
     for (int i = 0; i < SCHED_PRIO_LEVELS; i++) {
@@ -250,7 +251,7 @@ void sched_init() {
     main->slice = SCHED_QUANTUM;
     cpu->thread = main;
 
-    cpu->idle        = thread_alloc("idle", idle_loop, nullptr, SCHED_OTHER, 0);
+    cpu->idle = thread_alloc("idle", idle_loop, nullptr, SCHED_OTHER, 0);
     cpu->idle->state = THREAD_READY;
 
     printf("sched: initialized\n");

@@ -15,7 +15,7 @@ $(SUBDIRS):
 	$(MAKE) -C $@
 
 disk: all
-	test -f $(BINDIR)/cmdline.txt || echo "console=ttyS0" > $(BINDIR)/cmdline.txt
+	test -f $(BINDIR)/cmdline.txt || echo "console=console" > $(BINDIR)/cmdline.txt
 	$(MKDISK) $(DISK) --mbr $(BINDIR)/bootmbr.bin --stage2 $(BINDIR)/bootbios.bin \
 		KERNEL.ELF=$(BINDIR)/kernel.elf CMDLINE.TXT=$(BINDIR)/cmdline.txt \
 		INITRD.IMG=$(BINDIR)/initramfs.cpio
@@ -29,4 +29,5 @@ clean:
 	find . -name '*.o' -delete
 	find . -name '*.o64' -delete
 	find . -name '*.d' -delete
+	find . -name '*.a' -delete
 	rm -rf $(BINDIR)

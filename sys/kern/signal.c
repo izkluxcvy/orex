@@ -19,13 +19,13 @@
 
 struct sigq {
     struct siginfo info;
-    struct sigq   *next;
+    struct sigq *next;
 };
 
 struct sigset_ref {
-    uint64_t       *pending;
+    uint64_t *pending;
     struct siginfo *info;
-    struct sigq   **queue;
+    struct sigq **queue;
 };
 
 static struct sigset_ref of_proc(struct proc *p) {
@@ -86,17 +86,17 @@ static void tell_parent(struct proc *p, int code, int status) {
     const struct k_sigaction *act = &up->sig_actions[SIGCHLD];
     if (!(act->flags & SA_NOCLDSTOP)) {
         struct siginfo info = {.si_signo = SIGCHLD,
-                               .si_code  = code,
-                               .pid      = p->pid,
-                               .uid      = p->cred.ruid,
-                               .status   = status};
+                               .si_code = code,
+                               .pid = p->pid,
+                               .uid = p->cred.ruid,
+                               .status = status};
         signal_send_info_locked(up, &info);
     }
 }
 
 static void continue_locked(struct proc *p) {
     if (p->stopped) {
-        p->stopped     = 0;
+        p->stopped = 0;
         p->stop_report = 0;
         p->cont_report = 1;
         waitq_wakeup_all(&p->stop_wait);
@@ -173,8 +173,8 @@ static int enqueue(struct proc *p, struct sigset_ref s,
     if (!q) {
         return -EAGAIN;
     }
-    q->info            = *info;
-    q->next            = nullptr;
+    q->info = *info;
+    q->next = nullptr;
     struct sigq **tail = s.queue;
     while (*tail) {
         tail = &(*tail)->next;
@@ -202,8 +202,8 @@ int signal_send_info_locked(struct proc *p, const struct siginfo *info) {
 }
 
 int signal_send_thread_locked(struct thread *t, const struct siginfo *info) {
-    struct proc *p   = t->proc;
-    int          sig = info->si_signo;
+    struct proc *p = t->proc;
+    int sig = info->si_signo;
     if (p->state != PROC_ALIVE) {
         return 0;
     }
@@ -271,7 +271,7 @@ static void dequeue(struct proc *p, struct sigset_ref s, int sig,
     struct sigq *q = *pp;
     if (q) {
         *out = q->info;
-        *pp  = q->next;
+        *pp = q->next;
         kfree(q);
         p->sig_queued--;
         if (out->si_code == SI_TIMER) {
@@ -301,9 +301,9 @@ static void drop_all(struct proc *p, struct sigset_ref s, int sig) {
 }
 
 void signal_force(int sig, int code, uintptr_t addr) {
-    struct thread *t     = curthread;
-    struct proc   *p     = t->proc;
-    uint64_t       flags = spin_lock_irqsave(&sched_lock);
+    struct thread *t = curthread;
+    struct proc *p = t->proc;
+    uint64_t flags = spin_lock_irqsave(&sched_lock);
 
     if ((t->sig.blocked & SIGBIT(sig)) ||
         p->sig_actions[sig].handler == SIG_IGN) {
@@ -319,13 +319,14 @@ void signal_force(int sig, int code, uintptr_t addr) {
 
 int signal_pending() {
     struct thread *t = curthread;
-    struct proc   *p = t->proc;
-    return p && ((pending_for(t) & ~t->sig.blocked) || p->stopped);
+    struct proc *p = t->proc;
+    return p &&
+           ((pending_for(t) & ~t->sig.blocked) || p->exiting || p->stopped);
 }
 
 int signal_killed() {
     struct thread *t = curthread;
-    return t->proc && (pending_for(t) & SIGBIT(SIGKILL));
+    return t->proc && ((pending_for(t) & SIGBIT(SIGKILL)) || t->proc->exiting);
 }
 
 static void finish_syscall(void *frame, int handler, uint64_t flags) {
@@ -353,7 +354,7 @@ static void finish_syscall(void *frame, int handler, uint64_t flags) {
 
 void signal_deliver(void *frame) {
     struct thread *t = curthread;
-    struct proc   *p = t->proc;
+    struct proc *p = t->proc;
     if (!p) {
         return;
     }
@@ -376,7 +377,7 @@ void signal_deliver(void *frame) {
             return;
         }
 
-        int            sig = __builtin_ctzll(ready) + 1;
+        int sig = __builtin_ctzll(ready) + 1;
         struct siginfo info;
         take(t, sig, &info);
         struct k_sigaction act = p->sig_actions[sig];
@@ -388,8 +389,8 @@ void signal_deliver(void *frame) {
         }
         if (act.handler == SIG_DFL && is_stop(sig)) {
             if (sig == SIGSTOP || !pgrp_orphaned_locked(p->pgid)) {
-                p->stopped     = 1;
-                p->stop_sig    = sig;
+                p->stopped = 1;
+                p->stop_sig = sig;
                 p->stop_report = 1;
                 p->cont_report = 0;
                 tell_parent(p, CLD_STOPPED, sig);
@@ -403,7 +404,7 @@ void signal_deliver(void *frame) {
             proc_exit(W_SIGNALED(sig));
         }
 
-        uint64_t old   = t->sig.restore ? t->sig.saved : t->sig.blocked;
+        uint64_t old = t->sig.restore ? t->sig.saved : t->sig.blocked;
         t->sig.restore = 0;
         t->sig.blocked |= act.mask & ~UNBLOCKABLE;
         if (!(act.flags & SA_NODEFER)) {
@@ -424,8 +425,8 @@ void signal_deliver(void *frame) {
 }
 
 void signal_thread_init(struct thread *t, struct thread *from) {
-    t->sig          = (struct thread_sig){0};
-    t->sig.blocked  = from ? from->sig.blocked : 0;
+    t->sig = (struct thread_sig){0};
+    t->sig.blocked = from ? from->sig.blocked : 0;
     t->sig.altstack = (struct k_stack){.flags = SS_DISABLE};
     waitq_init(&t->sig_wait);
 }
@@ -434,7 +435,7 @@ void signal_thread_exit(struct thread *t) {
     uint64_t flags = spin_lock_irqsave(&sched_lock);
     while (t->sig.queue) {
         struct sigq *q = t->sig.queue;
-        t->sig.queue   = q->next;
+        t->sig.queue = q->next;
         kfree(q);
         t->proc->sig_queued--;
     }
@@ -448,7 +449,7 @@ void signal_fork(struct proc *child, struct proc *parent) {
     }
     struct thread *t = child->threads;
     signal_thread_init(t, curthread);
-    t->sig.altstack    = curthread->sig.altstack;
+    t->sig.altstack = curthread->sig.altstack;
     child->sig_pending = 0;
 }
 
@@ -467,10 +468,10 @@ void signal_exit(struct proc *p) {
     uint64_t flags = spin_lock_irqsave(&sched_lock);
     while (p->sig_queue) {
         struct sigq *q = p->sig_queue;
-        p->sig_queue   = q->next;
+        p->sig_queue = q->next;
         kfree(q);
     }
-    p->sig_queued  = 0;
+    p->sig_queued = 0;
     p->sig_pending = 0;
     spin_unlock_irqrestore(&sched_lock, flags);
 }
@@ -484,21 +485,21 @@ static int may_signal(struct proc *from, struct proc *to) {
 static struct siginfo user_info(int sig, int code) {
     struct proc *self = curproc();
     return (struct siginfo){.si_signo = sig,
-                            .si_code  = code,
-                            .pid      = self->pid,
-                            .uid      = self->cred.ruid};
+                            .si_code = code,
+                            .pid = self->pid,
+                            .uid = self->cred.ruid};
 }
 
 long sys_kill(long pid, long sig) {
     if (sig != 0 && !valid(sig)) {
         return -EINVAL;
     }
-    struct proc   *self    = curproc();
-    struct siginfo info    = user_info((int)sig, SI_USER);
-    uint64_t       flags   = spin_lock_irqsave(&sched_lock);
-    int            found   = 0;
-    int            allowed = 0;
-    long           err     = 0;
+    struct proc *self = curproc();
+    struct siginfo info = user_info((int)sig, SI_USER);
+    uint64_t flags = spin_lock_irqsave(&sched_lock);
+    int found = 0;
+    int allowed = 0;
+    long err = 0;
 
     int pgid = pid == 0 ? self->pgid : (int)-pid;
     for (struct proc *p = proc_list; p; p = p->all_next) {
@@ -515,7 +516,7 @@ long sys_kill(long pid, long sig) {
         allowed = 1;
         if (sig) {
             long r = signal_send_info_locked(p, &info);
-            err    = r < 0 ? r : err;
+            err = r < 0 ? r : err;
         }
     }
 
@@ -527,10 +528,10 @@ long sys_tgkill(long tgid, long tid, long sig) {
     if ((sig != 0 && !valid(sig)) || tid <= 0 || (tgid != -1 && tgid <= 0)) {
         return -EINVAL;
     }
-    struct siginfo info  = user_info((int)sig, SI_TKILL);
-    uint64_t       flags = spin_lock_irqsave(&sched_lock);
-    struct thread *t     = proc_find_thread_locked((pid_t)tid);
-    long           err   = 0;
+    struct siginfo info = user_info((int)sig, SI_TKILL);
+    uint64_t flags = spin_lock_irqsave(&sched_lock);
+    struct thread *t = proc_find_thread_locked((pid_t)tid);
+    long err = 0;
     if (!t || (tgid != -1 && t->proc->pid != tgid) ||
         t->proc->state != PROC_ALIVE) {
         err = -ESRCH;
@@ -555,15 +556,15 @@ long sys_rt_sigqueueinfo(long pid, long sig, const struct siginfo *uinfo) {
     if (info.si_code >= 0 && pid != self->pid) {
         return -EPERM;
     }
-    info.si_signo    = (int)sig;
-    info.pid         = self->pid;
-    info.uid         = self->cred.ruid;
-    uint64_t     f   = spin_lock_irqsave(&sched_lock);
-    struct proc *p   = proc_find_locked((pid_t)pid);
-    long         err = !p || p->state != PROC_ALIVE ? -ESRCH
-                       : !may_signal(self, p)       ? -EPERM
-                       : sig ? signal_send_info_locked(p, &info)
-                             : 0;
+    info.si_signo = (int)sig;
+    info.pid = self->pid;
+    info.uid = self->cred.ruid;
+    uint64_t f = spin_lock_irqsave(&sched_lock);
+    struct proc *p = proc_find_locked((pid_t)pid);
+    long err = !p || p->state != PROC_ALIVE ? -ESRCH
+               : !may_signal(self, p)       ? -EPERM
+               : sig                        ? signal_send_info_locked(p, &info)
+                                            : 0;
     spin_unlock_irqrestore(&sched_lock, f);
     return err < 0 ? err : 0;
 }
@@ -582,9 +583,9 @@ long sys_rt_sigaction(long sig, const struct k_sigaction *uact,
         return -EFAULT;
     }
 
-    struct proc       *p     = curproc();
-    uint64_t           flags = spin_lock_irqsave(&sched_lock);
-    struct k_sigaction old   = p->sig_actions[sig];
+    struct proc *p = curproc();
+    uint64_t flags = spin_lock_irqsave(&sched_lock);
+    struct k_sigaction old = p->sig_actions[sig];
     if (uact) {
         act.mask &= ~UNBLOCKABLE;
         p->sig_actions[sig] = act;
@@ -613,10 +614,10 @@ long sys_rt_sigprocmask(long how, const uint64_t *uset, uint64_t *uold,
         return -EFAULT;
     }
 
-    struct thread *t     = curthread;
-    uint64_t       flags = spin_lock_irqsave(&sched_lock);
-    uint64_t       old   = t->sig.blocked;
-    long           err   = 0;
+    struct thread *t = curthread;
+    uint64_t flags = spin_lock_irqsave(&sched_lock);
+    uint64_t old = t->sig.blocked;
+    long err = 0;
 
     if (uset) {
         switch (how) {
@@ -652,8 +653,8 @@ long sys_rt_sigpending(uint64_t *uset, long setsize) {
     if (setsize != sizeof(uint64_t)) {
         return -EINVAL;
     }
-    struct thread *t   = curthread;
-    uint64_t       set = pending_for(t) & t->sig.blocked;
+    struct thread *t = curthread;
+    uint64_t set = pending_for(t) & t->sig.blocked;
     return copy_to_user(uset, &set, sizeof(set));
 }
 
@@ -665,11 +666,11 @@ long sys_rt_sigsuspend(const uint64_t *umask, long setsize) {
     if (copy_from_user(&mask, umask, sizeof(mask)) != 0) {
         return -EFAULT;
     }
-    struct thread *t     = curthread;
-    uint64_t       flags = spin_lock_irqsave(&sched_lock);
-    t->sig.saved         = t->sig.blocked;
-    t->sig.restore       = 1;
-    t->sig.blocked       = mask & ~UNBLOCKABLE;
+    struct thread *t = curthread;
+    uint64_t flags = spin_lock_irqsave(&sched_lock);
+    t->sig.saved = t->sig.blocked;
+    t->sig.restore = 1;
+    t->sig.blocked = mask & ~UNBLOCKABLE;
     while (!signal_pending()) {
         waitq_sleep_intr(&t->sig_wait);
     }
@@ -678,11 +679,11 @@ long sys_rt_sigsuspend(const uint64_t *umask, long setsize) {
 }
 
 void signal_mask_during(uint64_t mask) {
-    struct thread *t     = curthread;
-    uint64_t       flags = spin_lock_irqsave(&sched_lock);
-    t->sig.saved         = t->sig.blocked;
-    t->sig.restore       = 1;
-    t->sig.blocked       = mask & ~UNBLOCKABLE;
+    struct thread *t = curthread;
+    uint64_t flags = spin_lock_irqsave(&sched_lock);
+    t->sig.saved = t->sig.blocked;
+    t->sig.restore = 1;
+    t->sig.blocked = mask & ~UNBLOCKABLE;
     spin_unlock_irqrestore(&sched_lock, flags);
 }
 
@@ -708,7 +709,7 @@ long sys_pause() {
 
 long sys_rt_sigtimedwait(const uint64_t *uset, struct siginfo *uinfo,
                          const void *utimeout, long setsize) {
-    uint64_t          set;
+    uint64_t set;
     struct k_timespec ts = {0};
     if (setsize != sizeof(uint64_t)) {
         return -EINVAL;
@@ -728,8 +729,8 @@ long sys_rt_sigtimedwait(const uint64_t *uset, struct siginfo *uinfo,
 
     struct thread *t = curthread;
     struct siginfo info;
-    uint64_t       flags = spin_lock_irqsave(&sched_lock);
-    long           ret;
+    uint64_t flags = spin_lock_irqsave(&sched_lock);
+    long ret;
     while (1) {
         uint64_t hit = pending_for(t) & set;
         if (hit) {
@@ -743,8 +744,8 @@ long sys_rt_sigtimedwait(const uint64_t *uset, struct siginfo *uinfo,
             break;
         }
         t->sig.waitset = set;
-        int r          = utimeout ? sleep_until(&t->sig_wait, deadline)
-                                  : waitq_sleep_intr(&t->sig_wait);
+        int r = utimeout ? sleep_until(&t->sig_wait, deadline)
+                         : waitq_sleep_intr(&t->sig_wait);
         t->sig.waitset = 0;
         if (r == -ETIMEDOUT) {
             ret = -EAGAIN;
@@ -759,10 +760,10 @@ long sys_rt_sigtimedwait(const uint64_t *uset, struct siginfo *uinfo,
 }
 
 long sys_sigaltstack(const struct k_stack *uss, struct k_stack *uold) {
-    struct thread *t   = curthread;
-    uintptr_t      sp  = frame_user_sp(t->frame);
+    struct thread *t = curthread;
+    uintptr_t sp = frame_user_sp(t->frame);
     struct k_stack cur = t->sig.altstack;
-    int            on =
+    int on =
         !(cur.flags & SS_DISABLE) && sp >= cur.sp && sp - cur.sp < cur.size;
     if (uss) {
         struct k_stack ss;
@@ -793,9 +794,9 @@ long sys_sigaltstack(const struct k_stack *uss, struct k_stack *uold) {
 
 long sys_rt_sigreturn() {
     struct thread *t = curthread;
-    uint64_t       blocked;
+    uint64_t blocked;
     struct k_stack alt;
-    long           rax;
+    long rax;
     t->syscall_nr = -1;
     if (signal_frame_pop(t->frame, &blocked, &alt, &rax) != 0) {
         proc_exit(W_SIGNALED(SIGSEGV));

@@ -19,7 +19,7 @@ SRCS := kern/main.c kern/cpu.c kern/panic.c kern/spinlock.c kern/thread.c \
 		kern/sched.c kern/waitq.c kern/mutex.c kern/time.c kern/syscall.c \
 		kern/vfs.c kern/vm.c kern/proc.c kern/exec.c kern/fd.c kern/pipe.c \
 		kern/signal.c kern/tty.c kern/cred.c kern/blk.c kern/vobj.c \
-		kern/mount.c kern/cmdline.c
+		kern/mount.c kern/cmdline.c kern/futex.c
 SRCS += arch/$(ARCH)/entry.c arch/$(ARCH)/init.c arch/$(ARCH)/serial.c \
 		arch/$(ARCH)/mem_.c arch/$(ARCH)/gdt.c arch/$(ARCH)/idt.c \
 		arch/$(ARCH)/trap.c arch/$(ARCH)/pmap.c arch/$(ARCH)/irq.c \

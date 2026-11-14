@@ -15,7 +15,7 @@
 static struct spinlock zombie_lock = {.name = "zombie"};
 
 static struct thread *zombies;
-static tid_t          next_tid = 1;
+static tid_t next_tid = 1;
 
 static void set_name(struct thread *t, const char *name) {
     size_t i = 0;
@@ -41,16 +41,16 @@ struct thread *thread_alloc(const char *name, thread_entry_t entry, void *arg,
     memset(t, 0, sizeof(*t));
 
     uint64_t idflags = spin_lock_irqsave(&zombie_lock);
-    t->tid           = next_tid++;
+    t->tid = next_tid++;
     spin_unlock_irqrestore(&zombie_lock, idflags);
 
-    t->state         = THREAD_BLOCKED;
-    t->policy        = policy;
-    t->priority      = priority;
+    t->state = THREAD_BLOCKED;
+    t->policy = policy;
+    t->priority = priority;
     t->base_priority = priority;
-    t->slice         = SCHED_QUANTUM;
-    t->entry         = entry;
-    t->arg           = arg;
+    t->slice = SCHED_QUANTUM;
+    t->entry = entry;
+    t->arg = arg;
     set_name(t, name);
 
     if (!entry) {
@@ -58,7 +58,7 @@ struct thread *thread_alloc(const char *name, thread_entry_t entry, void *arg,
     }
 
     t->stack_size = THREAD_STACK_SIZE;
-    t->stack      = kmalloc(t->stack_size);
+    t->stack = kmalloc(t->stack_size);
     if (!t->stack) {
         kfree(t);
         return nullptr;
@@ -95,8 +95,8 @@ void thread_yield() {
 
 static void make_reapable(struct thread *t) {
     uint64_t flags = spin_lock_irqsave(&zombie_lock);
-    t->next        = zombies;
-    zombies        = t;
+    t->next = zombies;
+    zombies = t;
     spin_unlock_irqrestore(&zombie_lock, flags);
 }
 
@@ -107,7 +107,7 @@ void thread_exit(void *retval) {
 
 void thread_exit_locked(void *retval) {
     curthread->retval = retval;
-    curthread->state  = THREAD_ZOMBIE;
+    curthread->state = THREAD_ZOMBIE;
     if (curthread->detached) {
         make_reapable(curthread);
     } else {
@@ -160,10 +160,15 @@ int thread_detach(struct thread *t) {
     return ok ? 0 : -1;
 }
 
+void thread_free(struct thread *t) {
+    kfree(t->stack);
+    kfree(t);
+}
+
 void thread_reap() {
     while (1) {
-        uint64_t       flags = spin_lock_irqsave(&zombie_lock);
-        struct thread *t     = zombies;
+        uint64_t flags = spin_lock_irqsave(&zombie_lock);
+        struct thread *t = zombies;
         if (t) {
             zombies = t->next;
         }

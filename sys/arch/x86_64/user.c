@@ -63,6 +63,8 @@ void context_set_kstack(uint64_t top) {
     curcpu()->kernel_rsp = top;
 }
 
+void context_set_tls(uint64_t base) { wrmsr(MSR_FS_BASE, base); }
+
 #define CR0_MP         (1ULL << 1)
 #define CR0_EM         (1ULL << 2)
 #define CR0_TS         (1ULL << 3)
@@ -124,6 +126,25 @@ static void fpu_sanitize(uint8_t *area) {
     memcpy(area + FXSAVE_MXCSR, &mxcsr, sizeof(mxcsr));
 }
 
+#define ARCH_SET_FS 0x1002
+#define ARCH_GET_FS 0x1003
+
+long sys_arch_prctl(long code, uintptr_t addr) {
+    switch (code) {
+    case ARCH_SET_FS:
+        if (addr >= USER_TOP) {
+            return -EPERM;
+        }
+        curthread->tls = addr;
+        context_set_tls(addr);
+        return 0;
+    case ARCH_GET_FS:
+        return copy_to_user((void *)addr, &curthread->tls, sizeof(uintptr_t));
+    default:
+        return -EINVAL;
+    }
+}
+
 void usermode_enter(uint64_t rip, uint64_t rsp) {
     __asm__ __volatile__("cli\n\t"
                          "push %2\n\t"
@@ -148,23 +169,39 @@ __attribute__((naked)) static void fork_trampoline() {
 }
 
 void context_setup_fork(struct thread *child) {
-    uint8_t          *top = (uint8_t *)child->stack + child->stack_size;
-    struct trapframe *tf  = (struct trapframe *)top - 1;
+    uint8_t *top = (uint8_t *)child->stack + child->stack_size;
+    struct trapframe *tf = (struct trapframe *)top - 1;
 
-    *tf        = *(struct trapframe *)curthread->frame;
-    tf->rax    = 0;
+    *tf = *(struct trapframe *)curthread->frame;
+    tf->rax = 0;
     child->rsp = context_setup(tf, fork_trampoline);
+    child->tls = curthread->tls;
     fxsave(child->fpu);
 }
 
+void context_setup_clone(struct thread *child, uintptr_t sp, uintptr_t tls,
+                         int set_tls) {
+    context_setup_fork(child);
+    struct trapframe *tf =
+        (struct trapframe *)((uint8_t *)child->stack + child->stack_size) - 1;
+    if (sp) {
+        tf->rsp = sp;
+    }
+    if (set_tls) {
+        child->tls = tls;
+    }
+}
+
 void context_exec(uint64_t rip, uint64_t rsp) {
+    curthread->tls = 0;
+    context_set_tls(0);
     fxrstor(fpu_clean);
     *(struct trapframe *)curthread->frame = (struct trapframe){
-        .rip    = rip,
-        .cs     = USER_CS,
+        .rip = rip,
+        .cs = USER_CS,
         .rflags = RFLAGS_IF,
-        .rsp    = rsp,
-        .ss     = USER_DS,
+        .rsp = rsp,
+        .ss = USER_DS,
     };
 }
 
@@ -178,17 +215,17 @@ struct sigcontext {
 };
 
 struct ucontext {
-    uint64_t          flags;
-    uint64_t          link;
-    struct k_stack    stack;
+    uint64_t flags;
+    uint64_t link;
+    struct k_stack stack;
     struct sigcontext mc;
-    uint64_t          sigmask;
+    uint64_t sigmask;
 };
 
 struct rt_sigframe {
-    uint64_t        pretcode;
+    uint64_t pretcode;
     struct ucontext uc;
-    struct siginfo  info;
+    struct siginfo info;
 };
 
 static_assert(offsetof(struct ucontext, mc) == 40);
@@ -208,7 +245,7 @@ void frame_set_retval(void *frame, long v) {
 
 void frame_restart_syscall(void *frame, long nr) {
     struct trapframe *tf = frame;
-    tf->rax              = (uint64_t)nr;
+    tf->rax = (uint64_t)nr;
     tf->rip -= 2;
 }
 
@@ -225,15 +262,15 @@ int signal_frame_push(void *frame, const struct k_sigaction *act,
                       const struct siginfo *info, uint64_t blocked,
                       const struct k_stack *alt) {
     struct trapframe *tf = frame;
-    uintptr_t         sp = tf->rsp - 128;
-    int               on = on_stack(alt, tf->rsp);
+    uintptr_t sp = tf->rsp - 128;
+    int on = on_stack(alt, tf->rsp);
     if ((act->flags & SA_ONSTACK) && !(alt->flags & SS_DISABLE) && alt->size &&
         !on) {
         sp = alt->sp + alt->size;
     }
 
     alignas(16) uint8_t fp[512];
-    uintptr_t           fpaddr = (sp - sizeof(fp)) & ~(uintptr_t)63;
+    uintptr_t fpaddr = (sp - sizeof(fp)) & ~(uintptr_t)63;
     uintptr_t fa = ((fpaddr - sizeof(struct rt_sigframe)) & ~(uintptr_t)15) - 8;
 
     irq_enable();
@@ -246,36 +283,36 @@ int signal_frame_push(void *frame, const struct k_sigaction *act,
 
     struct rt_sigframe f = {
         .pretcode = act->restorer,
-        .info     = *info,
-        .uc = {.stack   = {.sp    = alt->sp,
-                           .size  = alt->size,
-                           .flags = on ? SS_ONSTACK : alt->flags & SS_DISABLE},
+        .info = *info,
+        .uc = {.stack = {.sp = alt->sp,
+                         .size = alt->size,
+                         .flags = on ? SS_ONSTACK : alt->flags & SS_DISABLE},
                .sigmask = blocked,
-               .mc      = {.r8      = tf->r8,
-                           .r9      = tf->r9,
-                           .r10     = tf->r10,
-                           .r11     = tf->r11,
-                           .r12     = tf->r12,
-                           .r13     = tf->r13,
-                           .r14     = tf->r14,
-                           .r15     = tf->r15,
-                           .rdi     = tf->rdi,
-                           .rsi     = tf->rsi,
-                           .rbp     = tf->rbp,
-                           .rbx     = tf->rbx,
-                           .rdx     = tf->rdx,
-                           .rax     = tf->rax,
-                           .rcx     = tf->rcx,
-                           .rsp     = tf->rsp,
-                           .rip     = tf->rip,
-                           .eflags  = tf->rflags,
-                           .cs      = USER_CS,
-                           .ss      = USER_DS,
-                           .err     = tf->error_code,
-                           .trapno  = tf->vector,
-                           .oldmask = blocked,
-                           .cr2     = info->addr,
-                           .fpstate = fpaddr}}};
+               .mc = {.r8 = tf->r8,
+                      .r9 = tf->r9,
+                      .r10 = tf->r10,
+                      .r11 = tf->r11,
+                      .r12 = tf->r12,
+                      .r13 = tf->r13,
+                      .r14 = tf->r14,
+                      .r15 = tf->r15,
+                      .rdi = tf->rdi,
+                      .rsi = tf->rsi,
+                      .rbp = tf->rbp,
+                      .rbx = tf->rbx,
+                      .rdx = tf->rdx,
+                      .rax = tf->rax,
+                      .rcx = tf->rcx,
+                      .rsp = tf->rsp,
+                      .rip = tf->rip,
+                      .eflags = tf->rflags,
+                      .cs = USER_CS,
+                      .ss = USER_DS,
+                      .err = tf->error_code,
+                      .trapno = tf->vector,
+                      .oldmask = blocked,
+                      .cr2 = info->addr,
+                      .fpstate = fpaddr}}};
     if (copy_to_user((void *)fpaddr, fp, sizeof(fp)) != 0 ||
         copy_to_user((void *)fa, &f, sizeof(f)) != 0) {
         return -EFAULT;
@@ -295,7 +332,7 @@ int signal_frame_push(void *frame, const struct k_sigaction *act,
 int signal_frame_pop(void *frame, uint64_t *blocked, struct k_stack *alt,
                      long *rax) {
     struct trapframe *tf = frame;
-    struct ucontext   uc;
+    struct ucontext uc;
 
     if (copy_from_user(&uc, (void *)tf->rsp, sizeof(uc)) != 0) {
         return -EFAULT;
@@ -316,30 +353,30 @@ int signal_frame_pop(void *frame, uint64_t *blocked, struct k_stack *alt,
     }
 
     *tf = (struct trapframe){
-        .r15    = m->r15,
-        .r14    = m->r14,
-        .r13    = m->r13,
-        .r12    = m->r12,
-        .r11    = m->r11,
-        .r10    = m->r10,
-        .r9     = m->r9,
-        .r8     = m->r8,
-        .rdi    = m->rdi,
-        .rsi    = m->rsi,
-        .rbp    = m->rbp,
-        .rbx    = m->rbx,
-        .rdx    = m->rdx,
-        .rcx    = m->rcx,
-        .rax    = m->rax,
+        .r15 = m->r15,
+        .r14 = m->r14,
+        .r13 = m->r13,
+        .r12 = m->r12,
+        .r11 = m->r11,
+        .r10 = m->r10,
+        .r9 = m->r9,
+        .r8 = m->r8,
+        .rdi = m->rdi,
+        .rsi = m->rsi,
+        .rbp = m->rbp,
+        .rbx = m->rbx,
+        .rdx = m->rdx,
+        .rcx = m->rcx,
+        .rax = m->rax,
         .vector = TRAP_SYSCALL,
-        .rip    = m->rip,
-        .cs     = USER_CS,
+        .rip = m->rip,
+        .cs = USER_CS,
         .rflags = (m->eflags & RFLAGS_USER) | RFLAGS_IF,
-        .rsp    = m->rsp,
-        .ss     = USER_DS,
+        .rsp = m->rsp,
+        .ss = USER_DS,
     };
     *blocked = uc.sigmask;
-    *alt     = uc.stack;
-    *rax     = (long)m->rax;
+    *alt = uc.stack;
+    *rax = (long)m->rax;
     return 0;
 }

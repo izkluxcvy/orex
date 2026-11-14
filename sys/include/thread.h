@@ -32,42 +32,45 @@ struct thread {
     uint64_t rsp;
 
     tid_t tid;
-    char  name[THREAD_NAME_MAX];
+    char name[THREAD_NAME_MAX];
 
     enum thread_state state;
-    int               policy;
-    int               priority;
-    int               base_priority;
-    uint32_t          slice;
+    int policy;
+    int priority;
+    int base_priority;
+    uint32_t slice;
 
     thread_entry_t entry;
-    void          *arg;
-    void          *retval;
+    void *arg;
+    void *retval;
 
-    void  *stack; // kernel stack
+    void *stack; // kernel stack
     size_t stack_size;
 
     struct mutex *blocked_on;
     struct mutex *held;
 
-    struct proc      *proc;
-    struct thread    *proc_next;
-    tid_t             utid;
+    struct proc *proc;
+    struct thread *proc_next;
+    tid_t utid;
     struct thread_sig sig;
-    struct waitq      sig_wait;
-    struct file      *borrowed[THREAD_BORROW_MAX];
-    int               nborrowed;
-    int               uaccess_kernel;
-    struct pmap      *pmap;
-    void             *frame;
-    long              syscall_nr;
-    uint64_t          cpu_ns;
-    uint64_t          start_ns;
-    int               timed_out;
+    struct waitq sig_wait;
+    struct file *borrowed[THREAD_BORROW_MAX];
+    int nborrowed;
+    int uaccess_kernel;
+    struct pmap *pmap;
+    void *frame;
+    long syscall_nr;
+    uint64_t cpu_ns;
+    uint64_t start_ns;
+    int timed_out;
+    uintptr_t tls;
+    uintptr_t clear_tid;
+    uintptr_t robust_list;
     alignas(16) uint8_t fpu[512];
 
-    int           detached;
-    struct waitq  joiners;
+    int detached;
+    struct waitq joiners;
     struct waitq *sleep_wq;
 
     struct thread *next, *prev;
@@ -79,9 +82,10 @@ struct thread *thread_create(const char *name, thread_entry_t entry, void *arg,
                              int policy, int priority);
 [[noreturn]] void thread_exit(void *retval);
 [[noreturn]] void thread_exit_locked(void *retval);
-int               thread_join(struct thread *t, void **retval);
-int               thread_detach(struct thread *t);
-void              thread_yield();
-void              thread_reap();
+int thread_join(struct thread *t, void **retval);
+int thread_detach(struct thread *t);
+void thread_yield();
+void thread_reap();
+void thread_free(struct thread *t);
 
 static inline struct thread *thread_self() { return curthread; }

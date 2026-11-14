@@ -40,7 +40,7 @@ struct pthread {
     size_t map_size;
     struct __ptcb *cleanup;
     struct robust_head robust;
-    void *tsb[PTHREAD_KEYS_MAX];
+    void *tsd[PTHREAD_KEYS_MAX];
     unsigned tsd_gen[PTHREAD_KEYS_MAX];
     int tsd_used;
     struct __locale_struct *locale;

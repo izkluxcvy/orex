@@ -6,6 +6,7 @@
 #include <errno.h>
 #include <exec.h>
 #include <fd.h>
+#include <futex.h>
 #include <kmalloc.h>
 #include <ktime.h>
 #include <memcpy.h>
@@ -18,6 +19,8 @@
 #include <uaccess.h>
 #include <vfs.h>
 #include <vm.h>
+
+#include <user.h>
 
 #define AT_SYMLINK_FOLLOW 0x400
 
@@ -523,6 +526,61 @@ static long sys_fstatfs(long fd, struct k_statfs *ust) {
     return statfs_of(f->vnode, ust);
 }
 
+static long sys_get_robust_list(long tid, uintptr_t *uhead, size_t *ulen) {
+    uint64_t lf = spin_lock_irqsave(&sched_lock);
+    struct thread *t = tid ? proc_find_thread_locked((pid_t)tid) : curthread;
+    uintptr_t head = t ? t->robust_list : 0;
+    int ours = t && t->proc == curproc();
+    spin_unlock_irqrestore(&sched_lock, lf);
+    if (!t) {
+        return -ESRCH;
+    }
+    if (!ours) {
+        return -EPERM;
+    }
+    size_t len = 24;
+    if (copy_to_user(uhead, &head, sizeof(head)) != 0 ||
+        copy_to_user(ulen, &len, sizeof(len)) != 0) {
+        return -EFAULT;
+    }
+    return 0;
+}
+
+#define THREAD_FLAGS                                                           \
+    (CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_SIGHAND | CLONE_THREAD)
+#define THREAD_EXTRA                                                           \
+    (CLONE_SYSVSEM | CLONE_SETTLS | CLONE_PARENT_SETTID |                      \
+     CLONE_CHILD_CLEARTID | CLONE_CHILD_SETTID | CLONE_DETACHED)
+#define FORK_EXTRA                                                             \
+    (CLONE_PARENT_SETTID | CLONE_CHILD_CLEARTID | CLONE_CHILD_SETTID)
+
+static long sys_clone(unsigned long flags, uintptr_t sp, int *uptid, int *uctid,
+                      uintptr_t tls) {
+    if (flags & CLONE_THREAD) {
+        if ((flags & THREAD_FLAGS) != THREAD_FLAGS ||
+            (flags & ~(unsigned long)(THREAD_FLAGS | THREAD_EXTRA | 0xff))) {
+            return -EINVAL;
+        }
+        return proc_clone_thread(flags, sp, uptid, uctid, tls);
+    }
+    unsigned long rest = flags & ~(unsigned long)0xff;
+    if (rest == (CLONE_VM | CLONE_VFORK)) {
+        rest = 0;
+    }
+    if ((rest & ~(unsigned long)FORK_EXTRA) || ((flags & 0xff) != SIGCHLD)) {
+        return -EINVAL;
+    }
+    if (sp) {
+        return -EINVAL;
+    }
+    pid_t pid = proc_fork();
+    if (pid > 0 && (flags & CLONE_PARENT_SETTID) &&
+        copy_to_user(uptid, &pid, sizeof(pid)) != 0) {
+        return -EFAULT;
+    }
+    return pid;
+}
+
 static long do_execve(long dirfd, const char *upath, const char *const *uargv,
                       const char *const *uenvp, long flags) {
     if (flags & ~(long)(AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW)) {
@@ -790,6 +848,14 @@ long syscall_dispatch(long nr, long a0, long a1, long a2, long a3, long a4,
         return sys_lseek(a0, a1, a2);
     case SYS_msync:
         return sys_msync((uintptr_t)a0, (size_t)a1, a2);
+    case SYS_set_robust_list:
+        if (a1 != 24) {
+            return -EINVAL;
+        }
+        curthread->robust_list = (uintptr_t)a0;
+        return 0;
+    case SYS_get_robust_list:
+        return sys_get_robust_list(a0, (uintptr_t *)a1, (size_t *)a2);
     case SYS_ioctl:
         return sys_ioctl(a0, a1, (void *)a2);
     case SYS_rt_sigaction:
@@ -876,6 +942,17 @@ long syscall_dispatch(long nr, long a0, long a1, long a2, long a3, long a4,
     case SYS_sched_yield:
         thread_yield();
         return 0;
+    case SYS_clone:
+        return sys_clone((unsigned long)a0, (uintptr_t)a1, (int *)a2, (int *)a3,
+                         (uintptr_t)a4);
+    case SYS_futex:
+        return sys_futex((uint32_t *)a0, a1, (uint32_t)a2, (const void *)a3,
+                         (uint32_t *)a4, (uint32_t)a5);
+    case SYS_set_tid_address:
+        curthread->clear_tid = (uintptr_t)a0;
+        return curthread->utid;
+    case SYS_arch_prctl:
+        return sys_arch_prctl(a0, (uintptr_t)a1);
     case SYS_fork:
         return proc_fork();
     case SYS_execve:

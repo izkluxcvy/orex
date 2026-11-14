@@ -68,7 +68,7 @@ static int range_free(struct vmspace *vm, uintptr_t start, uintptr_t end) {
 }
 
 static uintptr_t find_free(struct vmspace *vm, size_t len) {
-    uintptr_t       best = 0, lo = USER_BASE, top = vm->mmap_top;
+    uintptr_t best = 0, lo = USER_BASE, top = vm->mmap_top;
     struct vm_area *a = vm->areas;
     while (lo < top) {
         uintptr_t hi = a && a->start < top ? a->start : top;
@@ -79,7 +79,7 @@ static uintptr_t find_free(struct vmspace *vm, size_t len) {
             break;
         }
         lo = a->end;
-        a  = a->next;
+        a = a->next;
     }
     return best;
 }
@@ -89,11 +89,11 @@ static struct vm_area *split(struct vm_area *a, uintptr_t at) {
     if (!b) {
         return nullptr;
     }
-    *b       = *a;
+    *b = *a;
     b->start = at;
     b->off += at - a->start;
     area_dup(b);
-    a->end  = at;
+    a->end = at;
     a->next = b;
     return b;
 }
@@ -131,7 +131,7 @@ void vm_clear(struct vmspace *vm) {
     pmap_clear_user(vm->pmap);
     while (vm->areas) {
         struct vm_area *a = vm->areas;
-        vm->areas         = a->next;
+        vm->areas = a->next;
         area_free(a);
     }
     vm->brk_base = vm->brk = 0;
@@ -150,17 +150,17 @@ static int copy_locked(struct vmspace *dst, struct vmspace *src) {
         if (!b) {
             return -ENOMEM;
         }
-        *b      = *a;
+        *b = *a;
         b->next = nullptr;
-        b->vm   = dst;
+        b->vm = dst;
         area_dup(b);
         *tail = b;
-        tail  = &b->next;
+        tail = &b->next;
     }
-    dst->brk_base  = src->brk_base;
-    dst->brk       = src->brk;
+    dst->brk_base = src->brk_base;
+    dst->brk = src->brk;
     dst->stack_top = src->stack_top;
-    dst->mmap_top  = src->mmap_top;
+    dst->mmap_top = src->mmap_top;
     return pmap_copy_user(dst->pmap, src->pmap) == 0 ? 0 : -ENOMEM;
 }
 
@@ -183,14 +183,14 @@ int vm_map(struct vmspace *vm, uintptr_t start, uintptr_t end, int prot,
     struct vm_area **pp = &vm->areas, *prev = nullptr;
     while (*pp && (*pp)->start < start) {
         prev = *pp;
-        pp   = &(*pp)->next;
+        pp = &(*pp)->next;
     }
     struct vm_area *next = *pp;
 
     if (!vn && mergeable(prev, prot) && prev->end == start) {
         prev->end = end;
         if (mergeable(next, prot) && next->start == end) {
-            prev->end  = next->end;
+            prev->end = next->end;
             prev->next = next->next;
             kfree(next);
         }
@@ -205,14 +205,14 @@ int vm_map(struct vmspace *vm, uintptr_t start, uintptr_t end, int prot,
     if (!a) {
         return -ENOMEM;
     }
-    *a  = (struct vm_area){.start    = start,
-                           .end      = end,
-                           .prot     = prot,
-                           .vn       = vn ? vnode_ref(vn) : nullptr,
-                           .off      = off,
-                           .file_end = file_end,
-                           .maxprot  = PROT_READ | PROT_WRITE | PROT_EXEC,
-                           .next     = next};
+    *a = (struct vm_area){.start = start,
+                          .end = end,
+                          .prot = prot,
+                          .vn = vn ? vnode_ref(vn) : nullptr,
+                          .off = off,
+                          .file_end = file_end,
+                          .maxprot = PROT_READ | PROT_WRITE | PROT_EXEC,
+                          .next = next};
     *pp = a;
     return 0;
 }
@@ -231,15 +231,15 @@ static int map_shared(struct vmspace *vm, uintptr_t start, uintptr_t end,
     while (*pp && (*pp)->start < start) {
         pp = &(*pp)->next;
     }
-    *a = (struct vm_area){.start   = start,
-                          .end     = end,
-                          .prot    = prot,
-                          .vn      = vn ? vnode_ref(vn) : nullptr,
-                          .off     = off,
-                          .obj     = obj,
-                          .vm      = vm,
+    *a = (struct vm_area){.start = start,
+                          .end = end,
+                          .prot = prot,
+                          .vn = vn ? vnode_ref(vn) : nullptr,
+                          .off = off,
+                          .obj = obj,
+                          .vm = vm,
                           .maxprot = maxprot,
-                          .next    = *pp};
+                          .next = *pp};
     vobj_link(obj, a);
     *pp = a;
     return 0;
@@ -268,13 +268,13 @@ static int carve(struct vmspace *vm, uintptr_t start, uintptr_t end,
 
 int vm_unmap(struct vmspace *vm, uintptr_t start, uintptr_t end) {
     struct vm_area **pp;
-    int              err = carve(vm, start, end, &pp);
+    int err = carve(vm, start, end, &pp);
     if (err) {
         return err;
     }
     while (*pp && (*pp)->start < end) {
         struct vm_area *a = *pp;
-        *pp               = a->next;
+        *pp = a->next;
         free_pages(vm, a->start, a->end);
         area_free(a);
     }
@@ -299,7 +299,7 @@ static int vm_protect(struct vmspace *vm, uintptr_t start, uintptr_t end,
         }
     }
     struct vm_area **pp;
-    int              err = carve(vm, start, end, &pp);
+    int err = carve(vm, start, end, &pp);
     if (err) {
         return err;
     }
@@ -320,9 +320,9 @@ static int fault_locked(struct vmspace *vm, uintptr_t va, int access) {
     if (!(a->prot & access)) {
         return -EACCES;
     }
-    uintptr_t page  = va & ~(PAGE_SIZE - 1);
-    uint64_t  flags = pte_flags(a->prot);
-    uint64_t  pte   = pmap_pte(vm->pmap, page);
+    uintptr_t page = va & ~(PAGE_SIZE - 1);
+    uint64_t flags = pte_flags(a->prot);
+    uint64_t pte = pmap_pte(vm->pmap, page);
     if (pte & PMAP_PRESENT) {
         uintptr_t old = pte & PMAP_ADDR;
         // Copy on write
@@ -409,9 +409,9 @@ int vm_prefault(struct vmspace *vm, uintptr_t va, size_t len, int access) {
 int vm_write(struct vmspace *vm, uintptr_t va, const void *src, size_t len) {
     const uint8_t *s = src;
     while (len) {
-        size_t in    = va & (PAGE_SIZE - 1);
+        size_t in = va & (PAGE_SIZE - 1);
         size_t chunk = PAGE_SIZE - in < len ? PAGE_SIZE - in : len;
-        int    err   = vm_fault(vm, va, PROT_WRITE);
+        int err = vm_fault(vm, va, PROT_WRITE);
         if (err) {
             return err;
         }
@@ -429,10 +429,10 @@ static int user_range(uintptr_t addr, size_t size) {
 
 static long do_mmap(uintptr_t addr, size_t len, long prot, long flags, long fd,
                     long off) {
-    struct proc    *p    = curproc();
-    struct vmspace *vm   = p->vm;
-    long            type = flags & (MAP_SHARED | MAP_PRIVATE);
-    size_t          size = page_up(len);
+    struct proc *p = curproc();
+    struct vmspace *vm = p->vm;
+    long type = flags & (MAP_SHARED | MAP_PRIVATE);
+    size_t size = page_up(len);
     if (!len || (prot & ~7L) || (type != MAP_SHARED && type != MAP_PRIVATE) ||
         (off & (PAGE_SIZE - 1))) {
         return -EINVAL;
@@ -440,8 +440,8 @@ static long do_mmap(uintptr_t addr, size_t len, long prot, long flags, long fd,
     if (size < len || size > USER_TOP) {
         return -ENOMEM;
     }
-    struct vnode *vn      = nullptr;
-    int           maxprot = PROT_READ | PROT_WRITE | PROT_EXEC;
+    struct vnode *vn = nullptr;
+    int maxprot = PROT_READ | PROT_WRITE | PROT_EXEC;
     if (!(flags & MAP_ANONYMOUS)) {
         struct file *f = fd_get_io(fd);
         if (!f) {
@@ -497,9 +497,9 @@ static long do_msync(uintptr_t addr, size_t len, long flags) {
         ((flags & MS_ASYNC) && (flags & MS_SYNC))) {
         return -EINVAL;
     }
-    struct vmspace *vm      = curproc()->vm;
-    uintptr_t       end     = addr + page_up(len);
-    uintptr_t       covered = addr;
+    struct vmspace *vm = curproc()->vm;
+    uintptr_t end = addr + page_up(len);
+    uintptr_t covered = addr;
     for (struct vm_area *a = vm->areas; a && covered < end; a = a->next) {
         if (a->end > covered && a->start <= covered) {
             covered = a->end;
@@ -512,10 +512,26 @@ static long do_msync(uintptr_t addr, size_t len, long flags) {
     for (struct vm_area *a = vm->areas; a && a->start < end; a = a->next) {
         if (a->end > addr && a->obj && a->obj->backing) {
             int e = vobj_sync(a->obj);
-            err   = err ? err : e;
+            err = err ? err : e;
         }
     }
     return err;
+}
+
+void vm_futex_key(struct vmspace *vm, uintptr_t addr, int private, void **space,
+                  uint64_t *off) {
+    *space = vm;
+    *off = addr;
+    if (private) {
+        return;
+    }
+    mutex_lock(&vm->lock);
+    struct vm_area *a = area_find(vm, addr);
+    if (a && a->obj) {
+        *space = a->obj;
+        *off = a->off + (addr - a->start);
+    }
+    mutex_unlock(&vm->lock);
 }
 
 static long do_brk(uintptr_t addr) {

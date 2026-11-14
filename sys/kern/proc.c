@@ -4,6 +4,7 @@
 #include <errno.h>
 #include <exec.h>
 #include <fd.h>
+#include <futex.h>
 #include <kmalloc.h>
 #include <memset.h>
 #include <proc.h>
@@ -12,6 +13,7 @@
 #include <spinlock.h>
 #include <thread.h>
 #include <tty.h>
+#include <uaccess.h>
 #include <vfs.h>
 #include <vm.h>
 #include <waitq.h>
@@ -19,10 +21,10 @@
 #include "pmap.h"
 #include "user.h"
 
-struct proc         proc0    = {.name = "kernel", .umask = 022};
-static pid_t        next_pid = 1;
+struct proc proc0 = {.name = "kernel", .umask = 022};
+static pid_t next_pid = 1;
 static struct proc *initproc;
-struct proc        *proc_list;
+struct proc *proc_list;
 
 struct proc *curproc() { return curthread->proc ? curthread->proc : &proc0; }
 
@@ -51,6 +53,7 @@ static struct proc *proc_alloc(const char *name) {
     p->start_time = time_real() / NSEC;
     waitq_init(&p->child_exit);
     waitq_init(&p->stop_wait);
+    waitq_init(&p->exec_wait);
     spin_lock_init(&p->files_lock, "files");
 
     p->vm = vm_create();
@@ -79,8 +82,8 @@ static struct thread *new_thread(struct proc *p, thread_entry_t entry,
                                  void *arg) {
     struct thread *t = thread_alloc(p->name, entry, arg, SCHED_OTHER, 0);
     if (t) {
-        t->proc     = p;
-        t->pmap     = p->vm->pmap;
+        t->proc = p;
+        t->pmap = p->vm->pmap;
         t->detached = 1;
         context_fpu_init(t);
         signal_thread_init(t, nullptr);
@@ -92,29 +95,29 @@ static struct thread *proc_thread(struct proc *p, thread_entry_t entry,
                                   void *arg) {
     struct thread *t = new_thread(p, entry, arg);
     if (t) {
-        p->threads  = t;
+        p->threads = t;
         p->nthreads = 1;
     }
     return t;
 }
 
 static void proc_start(struct proc *p, struct proc *parent) {
-    p->pid           = next_pid++;
+    p->pid = next_pid++;
     p->threads->utid = p->pid;
-    p->pgid          = parent->pgid;
-    p->sid           = parent->sid;
-    p->ctty          = parent->ctty;
-    p->cwd           = parent->cwd ? vnode_ref(parent->cwd) : nullptr;
-    p->umask         = parent->umask;
+    p->pgid = parent->pgid;
+    p->sid = parent->sid;
+    p->ctty = parent->ctty;
+    p->cwd = parent->cwd ? vnode_ref(parent->cwd) : nullptr;
+    p->umask = parent->umask;
     if (p->pid == 1) {
         initproc = p;
         p->pgid = p->sid = 1;
-        p->ctty          = nullptr;
+        p->ctty = nullptr;
     }
-    p->all_next      = proc_list;
-    proc_list        = p;
-    p->parent        = parent;
-    p->sibling       = parent->children;
+    p->all_next = proc_list;
+    proc_list = p;
+    p->parent = parent;
+    p->sibling = parent->children;
     parent->children = p;
     sched_enqueue(p->threads);
 }
@@ -153,26 +156,26 @@ static int load_program(struct vmspace *vm, const char *path,
         return err;
     }
     struct exec_image img;
-    char             *interp = kmalloc(EXEC_INTERP_MAX);
+    char *interp = kmalloc(EXEC_INTERP_MAX);
     err =
         interp ? exec_load(vm, file, EXEC_PIE_BASE, &img, interp, 1) : -ENOMEM;
     uintptr_t start = img.entry;
     img.interp_base = 0;
     if (!err && interp[0]) {
-        struct vnode     *ld;
+        struct vnode *ld;
         struct exec_image li;
         err = vfs_exec_open(interp, &ld);
         if (!err) {
             err = exec_load(vm, ld, EXEC_INTERP_BASE, &li, nullptr, 0);
             vnode_put(ld);
         }
-        start           = li.entry;
+        start = li.entry;
         img.interp_base = li.base;
     }
     kfree(interp);
     if (!err) {
         exec_creds(cred, file);
-        err    = exec_setup_stack(vm, a, &img, cred, path, &e->rsp);
+        err = exec_setup_stack(vm, a, &img, cred, path, &e->rsp);
         e->rip = start;
     }
     vnode_put(file);
@@ -186,10 +189,10 @@ struct proc *proc_spawn(const char *path, const char *const *argv,
         return nullptr;
     }
 
-    struct exec_args   a;
+    struct exec_args a;
     struct user_entry *e = kmalloc(sizeof(*e));
-    int err              = e ? exec_args_from_kernel(&a, argv, envp) : -ENOMEM;
-    p->cred              = curproc()->cred;
+    int err = e ? exec_args_from_kernel(&a, argv, envp) : -ENOMEM;
+    p->cred = curproc()->cred;
     if (!err) {
         err = load_program(p->vm, path, nullptr, &a, e, &p->cred);
         exec_args_free(&a);
@@ -214,6 +217,8 @@ struct proc *proc_spawn(const char *path, const char *const *argv,
     return p;
 }
 
+static int sole_thread(struct proc *p);
+
 int proc_exec(const char *path, struct vnode *given,
               const struct exec_args *a) {
     struct proc *p = curproc();
@@ -226,17 +231,21 @@ int proc_exec(const char *path, struct vnode *given,
         return -ENOMEM;
     }
     struct user_entry e;
-    struct cred       cred = p->cred;
-    int               err  = load_program(vm, path, given, a, &e, &cred);
+    struct cred cred = p->cred;
+    int err = load_program(vm, path, given, a, &e, &cred);
     if (err) {
         vm_destroy(vm);
         return err;
     }
+    if (!sole_thread(p)) {
+        vm_destroy(vm);
+        proc_thread_exit(0);
+    }
 
-    uint64_t        flags = spin_lock_irqsave(&sched_lock);
-    struct vmspace *old   = p->vm;
-    p->vm                 = vm;
-    curthread->pmap       = vm->pmap;
+    uint64_t flags = spin_lock_irqsave(&sched_lock);
+    struct vmspace *old = p->vm;
+    p->vm = vm;
+    curthread->pmap = vm->pmap;
     pmap_activate(vm->pmap);
     spin_unlock_irqrestore(&sched_lock, flags);
 
@@ -249,6 +258,24 @@ int proc_exec(const char *path, struct vnode *given,
     p->cred = cred;
     context_exec(e.rip, e.rsp);
     return 0;
+}
+
+static int sole_thread(struct proc *p) {
+    uint64_t flags = spin_lock_irqsave(&sched_lock);
+    int ok = !p->exiting;
+    if (ok && p->nthreads > 1) {
+        p->exiting = EXIT_EXEC;
+        signal_kick_others_locked(p);
+        while (p->nthreads > 1) {
+            waitq_sleep(&p->exec_wait);
+        }
+        p->exiting = 0;
+    }
+    if (ok) {
+        curthread->utid = p->pid;
+    }
+    spin_unlock_irqrestore(&sched_lock, flags);
+    return ok;
 }
 
 static void *fork_placeholder(void *arg) { return arg; }
@@ -283,6 +310,45 @@ pid_t proc_fork() {
     return pid;
 }
 
+long proc_clone_thread(unsigned long flags, uintptr_t sp, int *uptid,
+                       int *uctid, uintptr_t tls) {
+    struct proc *p = curproc();
+    struct thread *t = new_thread(p, fork_placeholder, nullptr);
+    if (!t) {
+        return -EAGAIN;
+    }
+    context_setup_clone(t, sp, tls, (flags & CLONE_SETTLS) != 0);
+    sched_setscheduler(t, curthread->policy, curthread->base_priority);
+    signal_thread_init(t, curthread);
+    if (flags & CLONE_CHILD_CLEARTID) {
+        t->clear_tid = (uintptr_t)uctid;
+    }
+
+    uint64_t lf = spin_lock_irqsave(&sched_lock);
+    if (p->exiting) {
+        spin_unlock_irqrestore(&sched_lock, lf);
+        thread_free(t);
+        return -EAGAIN;
+    }
+    int tid = next_pid++;
+    t->utid = tid;
+    t->proc_next = p->threads;
+    p->threads = t;
+    p->nthreads++;
+    spin_unlock_irqrestore(&sched_lock, lf);
+
+    if (((flags & CLONE_PARENT_SETTID) &&
+         copy_to_user(uptid, &tid, sizeof(tid)) != 0) ||
+        ((flags & CLONE_CHILD_SETTID) &&
+         copy_to_user(uctid, &tid, sizeof(tid)) != 0)) {
+        return -EFAULT;
+    }
+    lf = spin_lock_irqsave(&sched_lock);
+    sched_enqueue(t);
+    spin_unlock_irqrestore(&sched_lock, lf);
+    return tid;
+}
+
 struct thread *proc_find_thread_locked(pid_t tid) {
     for (struct proc *p = proc_list; p; p = p->all_next) {
         for (struct thread *t = p->threads; t; t = t->proc_next) {
@@ -300,12 +366,12 @@ static int pgrp_has_stopped(pid_t pgid);
 
 static void child_info(struct proc *c, struct siginfo *info) {
     int killed = (c->status & 0x7f) != 0;
-    *info      = (struct siginfo){.si_signo = SIGCHLD,
-                                  .si_code  = killed ? CLD_KILLED : CLD_EXITED,
-                                  .pid      = c->pid,
-                                  .uid      = c->cred.ruid,
-                                  .status   = killed ? c->status & 0x7f
-                                                     : (c->status >> 8) & 0xff};
+    *info = (struct siginfo){.si_signo = SIGCHLD,
+                             .si_code = killed ? CLD_KILLED : CLD_EXITED,
+                             .pid = c->pid,
+                             .uid = c->cred.ruid,
+                             .status = killed ? c->status & 0x7f
+                                              : (c->status >> 8) & 0xff};
 }
 
 void proc_exit(int status) {
@@ -313,15 +379,33 @@ void proc_exit(int status) {
     if (!p) {
         thread_exit(nullptr);
     }
+    uint64_t flags = spin_lock_irqsave(&sched_lock);
+    if (!p->exiting || p->exiting == EXIT_EXEC) {
+        p->exiting = EXIT_GROUP;
+        p->exit_status = status;
+        signal_kick_others_locked(p);
+    }
+    spin_unlock_irqrestore(&sched_lock, flags);
     proc_thread_exit(status);
+}
+
+static void clear_child_tid(struct thread *t) {
+    int zero = 0;
+    if (t->clear_tid &&
+        copy_to_user((void *)t->clear_tid, &zero, sizeof(zero)) == 0) {
+        futex_wake(t->proc->vm, t->clear_tid, 1);
+    }
+    t->clear_tid = 0;
 }
 
 [[noreturn]] static void teardown(struct proc *p, int status);
 
 void proc_thread_exit(int status) {
     struct thread *t = curthread;
-    struct proc   *p = t->proc;
+    struct proc *p = t->proc;
     fd_return_borrowed();
+    futex_exit_robust(t);
+    clear_child_tid(t);
     signal_thread_exit(t);
 
     uint64_t flags = spin_lock_irqsave(&sched_lock);
@@ -333,7 +417,13 @@ void proc_thread_exit(int status) {
     }
     p->cpu_ns += time_thread_cpu(t);
     if (--p->nthreads > 0) {
+        if (p->exiting == EXIT_EXEC && p->nthreads == 1) {
+            waitq_wakeup_all(&p->exec_wait);
+        }
         thread_exit_locked(nullptr);
+    }
+    if (p->exiting == EXIT_GROUP) {
+        status = p->exit_status;
     }
     spin_unlock_irqrestore(&sched_lock, flags);
     teardown(p, status);
@@ -349,9 +439,9 @@ void proc_thread_exit(int status) {
     spin_lock_irqsave(&sched_lock);
 
     pid_t groups[ORPHAN_CHECKS] = {p->pgid};
-    int   ngroups               = 1;
+    int ngroups = 1;
     for (struct proc *c = p->children; c && ngroups < ORPHAN_CHECKS;
-         c              = c->sibling) {
+         c = c->sibling) {
         groups[ngroups++] = c->pgid;
     }
     if (p->pid == p->sid) {
@@ -361,16 +451,16 @@ void proc_thread_exit(int status) {
     struct proc *heir = (initproc && initproc != p) ? initproc : &proc0;
     while (p->children) {
         struct proc *c = p->children;
-        p->children    = c->sibling;
-        c->parent      = heir;
-        c->sibling     = heir->children;
+        p->children = c->sibling;
+        c->parent = heir;
+        c->sibling = heir->children;
         heir->children = c;
         if (c->state == PROC_ZOMBIE) {
             waitq_wakeup_all(&heir->child_exit);
         }
     }
 
-    p->state  = PROC_ZOMBIE;
+    p->state = PROC_ZOMBIE;
     p->status = status;
 
     for (int i = 0; i < ngroups; i++) {
@@ -381,9 +471,9 @@ void proc_thread_exit(int status) {
         }
     }
 
-    struct proc              *parent = p->parent;
-    const struct k_sigaction *act    = &parent->sig_actions[SIGCHLD];
-    struct siginfo            info;
+    struct proc *parent = p->parent;
+    const struct k_sigaction *act = &parent->sig_actions[SIGCHLD];
+    struct siginfo info;
     child_info(p, &info);
     if (act->handler != SIG_IGN) {
         signal_send_info_locked(parent, &info);
@@ -396,8 +486,8 @@ void proc_thread_exit(int status) {
                 break;
             }
         }
-        p->parent      = heir;
-        p->sibling     = heir->children;
+        p->parent = heir;
+        p->sibling = heir->children;
         heir->children = p;
         waitq_wakeup_all(&heir->child_exit);
     }
@@ -415,9 +505,9 @@ static int wanted(struct proc *self, struct proc *c, pid_t pid) {
 
 pid_t proc_wait(pid_t pid, int *status, int options, struct siginfo *info,
                 void *rusage) {
-    struct proc *self  = curproc();
-    uint64_t     flags = spin_lock_irqsave(&sched_lock);
-    int          intr  = 0;
+    struct proc *self = curproc();
+    uint64_t flags = spin_lock_irqsave(&sched_lock);
+    int intr = 0;
 
     while (1) {
         int found = 0;
@@ -440,10 +530,10 @@ pid_t proc_wait(pid_t pid, int *status, int options, struct siginfo *info,
                 if (info) {
                     *info = (struct siginfo){
                         .si_signo = SIGCHLD,
-                        .si_code  = stop ? CLD_STOPPED : CLD_CONTINUED,
-                        .pid      = c->pid,
-                        .uid      = c->cred.ruid,
-                        .status   = stop ? c->stop_sig : SIGCONT};
+                        .si_code = stop ? CLD_STOPPED : CLD_CONTINUED,
+                        .pid = c->pid,
+                        .uid = c->cred.ruid,
+                        .status = stop ? c->stop_sig : SIGCONT};
                 }
                 if (!(options & WNOWAIT)) {
                     c->stop_report = c->cont_report = 0;
@@ -514,9 +604,9 @@ int proc_setpgid(pid_t pid, pid_t pgid) {
     if (pgid < 0) {
         return -EINVAL;
     }
-    uint64_t     flags = spin_lock_irqsave(&sched_lock);
-    struct proc *p     = pid ? proc_find_locked(pid) : self;
-    int          err   = 0;
+    uint64_t flags = spin_lock_irqsave(&sched_lock);
+    struct proc *p = pid ? proc_find_locked(pid) : self;
+    int err = 0;
     if (!p || p->state != PROC_ALIVE || (p != self && p->parent != self)) {
         err = -ESRCH;
     } else if (p->sid != self->sid || p->pid == p->sid) {
@@ -534,9 +624,9 @@ int proc_setpgid(pid_t pid, pid_t pgid) {
 }
 
 pid_t proc_setsid() {
-    struct proc *self  = curproc();
-    uint64_t     flags = spin_lock_irqsave(&sched_lock);
-    pid_t        ret   = self->pid;
+    struct proc *self = curproc();
+    uint64_t flags = spin_lock_irqsave(&sched_lock);
+    pid_t ret = self->pid;
     for (struct proc *q = proc_list; q; q = q->all_next) {
         if (q->pgid == self->pid && q->state == PROC_ALIVE) {
             ret = -EPERM;
@@ -545,16 +635,16 @@ pid_t proc_setsid() {
     }
     if (ret > 0) {
         self->sid = self->pgid = self->pid;
-        self->ctty             = nullptr;
+        self->ctty = nullptr;
     }
     spin_unlock_irqrestore(&sched_lock, flags);
     return ret;
 }
 
 pid_t proc_getsid(pid_t pid) {
-    uint64_t     flags = spin_lock_irqsave(&sched_lock);
-    struct proc *p     = pid ? proc_find_locked(pid) : curproc();
-    pid_t        sid   = p ? p->sid : -ESRCH;
+    uint64_t flags = spin_lock_irqsave(&sched_lock);
+    struct proc *p = pid ? proc_find_locked(pid) : curproc();
+    pid_t sid = p ? p->sid : -ESRCH;
     spin_unlock_irqrestore(&sched_lock, flags);
     return sid;
 }
@@ -583,9 +673,9 @@ static int pgrp_has_stopped(pid_t pgid) {
 }
 
 pid_t proc_getpgid(pid_t pid) {
-    uint64_t     flags = spin_lock_irqsave(&sched_lock);
-    struct proc *p     = pid ? proc_find_locked(pid) : curproc();
-    pid_t        pgid  = p ? p->pgid : -ESRCH;
+    uint64_t flags = spin_lock_irqsave(&sched_lock);
+    struct proc *p = pid ? proc_find_locked(pid) : curproc();
+    pid_t pgid = p ? p->pgid : -ESRCH;
     spin_unlock_irqrestore(&sched_lock, flags);
     return pgid;
 }

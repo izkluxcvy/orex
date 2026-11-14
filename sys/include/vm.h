@@ -27,34 +27,37 @@ struct vobj;
 #define MMAP_GAP       (1UL << 20)
 
 struct vm_area {
-    uintptr_t       start, end;
-    int             prot;
-    struct vnode   *vn;
-    uint64_t        off;
-    uintptr_t       file_end;
-    struct vobj    *obj;
+    uintptr_t start, end;
+    int prot;
+    struct vnode *vn;
+    uint64_t off;
+    uintptr_t file_end;
+    struct vobj *obj;
     struct vmspace *vm;
     struct vm_area *obj_next;
-    int             maxprot;
+    int maxprot;
     struct vm_area *next;
 };
 
 struct vmspace {
-    struct mutex    lock;
-    struct pmap    *pmap;
+    struct mutex lock;
+    struct pmap *pmap;
     struct vm_area *areas;
-    uintptr_t       brk_base, brk;
-    uintptr_t       stack_top, mmap_top;
+    uintptr_t brk_base, brk;
+    uintptr_t stack_top, mmap_top;
 };
 
 struct vmspace *vm_create();
-void            vm_destroy(struct vmspace *vm);
-void            vm_clear(struct vmspace *vm);
-int             vm_copy(struct vmspace *dst, struct vmspace *src);
+void vm_destroy(struct vmspace *vm);
+void vm_clear(struct vmspace *vm);
+int vm_copy(struct vmspace *dst, struct vmspace *src);
 
 int vm_map(struct vmspace *vm, uintptr_t start, uintptr_t end, int prot,
            struct vnode *vn, uint64_t off, uintptr_t file_end);
 int vm_unmap(struct vmspace *vm, uintptr_t start, uintptr_t end);
+
+void vm_futex_key(struct vmspace *vm, uintptr_t addr, int private, void **space,
+                  uint64_t *off);
 
 int vm_fault(struct vmspace *vm, uintptr_t va, int access);
 int vm_prefault(struct vmspace *vm, uintptr_t va, size_t len, int access);

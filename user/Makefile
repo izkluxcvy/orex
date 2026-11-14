@@ -30,6 +30,7 @@ ROOTFS_BLOCK = 1024
 
 LIB_OBJS := lib/crt0.o lib/ulib.o
 PROGS := hello init cat id ls fs share
+LIBC_PROGS := thr
 
 LIBC := libc/libc.a
 CRT1 := libc/crt/crt1.o
@@ -37,15 +38,16 @@ LIBC_SRCS := $(shell find libc/src -name '*.c')
 LIBC_OBJS := $(patsubst %.c,%.o,$(filter-out libc/src/ldso/dynlink.c,$(LIBC_SRCS)))
 
 ULIB_BINS := $(PROGS:%=$(ROOT)/bin/%)
-BINS := $(ULIB_BINS)
+LIBC_BINS := $(LIBC_PROGS:%=$(ROOT)/bin/%)
+BINS := $(ULIB_BINS) $(LIBC_BINS)
 
 STATIC := $(shell find root -type f)
-OBJS := $(LIB_OBJS) $(PROGS:%=bin/%.o)
+OBJS := $(LIB_OBJS) $(PROGS:%=bin/%.o) $(LIBC_PROGS:%=bin/%.o)
 OBJS += $(CRT1) $(LIBC_OBJS)
 
 .PHONY: all
 
-all: $(TARGET) $(ROOTFS) $(LIBC) $(CRT1)
+all: $(TARGET) $(ROOTFS)
 
 %.o: %.c
 	$(CC) $(CFLAGS) -c -o $@ $<
@@ -55,10 +57,15 @@ $(ULIB_BINS): $(ROOT)/bin/%: bin/%.o $(LIB_OBJS) user.ld
 	$(LD) $(LDFLAGS) -o $@ $< $(LIB_OBJS)
 
 $(LIBC_OBJS) $(CRT1): CFLAGS := $(LIBC_CFLAGS)
+$(LIBC_PROGS:%=bin/%.o): CFLAGS := $(APP_CFLAGS)
 
 $(LIBC): $(LIBC_OBJS)
 	rm -f $@
 	$(AR) rcs $@ $^
+
+$(LIBC_BINS): $(ROOT)/bin/%: bin/%.o $(CRT1) $(LIBC) user.ld
+	mkdir -p $(dir $@)
+	$(LD) $(LDFLAGS) -o $@ $(CRT1) $< $(LIBC)
 
 $(TARGET): owners tools/mkcpio.py $(BINS) $(STATIC)
 	mkdir -p $(ROOT)
