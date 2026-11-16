@@ -1,0 +1,97 @@
+#include <langinfo.h>
+
+#include <locale_impl.h>
+
+static const char *const items[] = {
+    [CODESET] = "",
+    [D_T_FMT] = "%a %b %e %H:%M:%S %Y",
+    [D_FMT] = "%m/%d/%y",
+    [T_FMT] = "%H:%M:%S",
+    [T_FMT_AMPM] = "%I:%M:%S %p",
+    [AM_STR] = "AM",
+    [PM_STR] = "PM",
+    [DAY_1] = "Sunday",
+    [DAY_2] = "Monday",
+    [DAY_3] = "Tuesday",
+    [DAY_4] = "Wednesday",
+    [DAY_5] = "Thursday",
+    [DAY_6] = "Friday",
+    [DAY_7] = "Saturday",
+    [ABDAY_1] = "Sun",
+    [ABDAY_2] = "Mon",
+    [ABDAY_3] = "Tue",
+    [ABDAY_4] = "Wed",
+    [ABDAY_5] = "Thu",
+    [ABDAY_6] = "Fri",
+    [ABDAY_7] = "Sat",
+    [MON_1] = "January",
+    [MON_2] = "February",
+    [MON_3] = "March",
+    [MON_4] = "April",
+    [MON_5] = "May",
+    [MON_6] = "June",
+    [MON_7] = "July",
+    [MON_8] = "August",
+    [MON_9] = "September",
+    [MON_10] = "October",
+    [MON_11] = "November",
+    [MON_12] = "December",
+    [ABMON_1] = "Jan",
+    [ABMON_2] = "Feb",
+    [ABMON_3] = "Mar",
+    [ABMON_4] = "Apr",
+    [ABMON_5] = "May",
+    [ABMON_6] = "Jun",
+    [ABMON_7] = "Jul",
+    [ABMON_8] = "Aug",
+    [ABMON_9] = "Sep",
+    [ABMON_10] = "Oct",
+    [ABMON_11] = "Nov",
+    [ABMON_12] = "Dec",
+    [ALTMON_1] = "January",
+    [ALTMON_2] = "February",
+    [ALTMON_3] = "March",
+    [ALTMON_4] = "April",
+    [ALTMON_5] = "May",
+    [ALTMON_6] = "June",
+    [ALTMON_7] = "July",
+    [ALTMON_8] = "August",
+    [ALTMON_9] = "September",
+    [ALTMON_10] = "October",
+    [ALTMON_11] = "November",
+    [ALTMON_12] = "December",
+    [ABALTMON_1] = "Jan",
+    [ABALTMON_2] = "Feb",
+    [ABALTMON_3] = "Mar",
+    [ABALTMON_4] = "Apr",
+    [ABALTMON_5] = "May",
+    [ABALTMON_6] = "Jun",
+    [ABALTMON_7] = "Jul",
+    [ABALTMON_8] = "Aug",
+    [ABALTMON_9] = "Sep",
+    [ABALTMON_10] = "Oct",
+    [ABALTMON_11] = "Nov",
+    [ABALTMON_12] = "Dec",
+    [ERA] = "",
+    [ERA_D_FMT] = "",
+    [ALT_DIGITS] = "",
+    [ERA_D_T_FMT] = "",
+    [ERA_T_FMT] = "",
+    [RADIXCHAR] = ".",
+    [THOUSEP] = "",
+    [YESEXPR] = "^[yY]",
+    [NOEXPR] = "^[nN]",
+    [CRNCYSTR] = "",
+};
+
+char *nl_langinfo_l(nl_item item, locale_t loc) {
+    if (item == CODESET) {
+        return UTF8_L(loc) ? "UTF-8" : "ANSI_X3.4-1968";
+    }
+    if (item < 0 || item >= (nl_item)(sizeof(items) / sizeof(items[0]))) {
+        return "";
+    }
+    return (char *)items[item];
+}
+
+char *nl_langinfo(nl_item item) { return nl_langinfo_l(item, __cur_locale()); }
