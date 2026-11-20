@@ -29,8 +29,8 @@ ROOTFS_SIZE = 32M
 ROOTFS_BLOCK = 1024
 
 LIB_OBJS := lib/crt0.o lib/ulib.o
-PROGS := hello init cat id ls fs share
-LIBC_PROGS := thr uni tac
+PROGS := init cat id ls fs share
+LIBC_PROGS := hello thr uni tac pf
 
 LIBC := libc/libc.a
 CRT1 := libc/crt/crt1.o
