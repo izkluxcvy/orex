@@ -1,6 +1,6 @@
 #include "../lib/ulib.h"
 
-#define ARGS_MAX 16
+#define ARGS_MAX 32
 
 static char line[256];
 
@@ -23,9 +23,9 @@ static int split(char *s, char **argv) {
 }
 
 static void run(char **argv) {
-    char  path[64] = "/bin/";
-    char *envp[]   = {"PATH=/bin", nullptr};
-    int   pid      = fork();
+    char path[64] = "/bin/";
+    char *envp[] = {"PATH=/bin", nullptr};
+    int pid = fork();
     if (pid == 0) {
         setpgid(0, 0);
         tcsetpgrp(0, getpid());
